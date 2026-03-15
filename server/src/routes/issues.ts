@@ -81,27 +81,37 @@ export function issueRoutes(db: Db, storage: StorageService) {
     return false;
   }
 
-  function canCreateAgentsLegacy(agent: { permissions: Record<string, unknown> | null | undefined; role: string }) {
-    if (agent.role === "ceo") return true;
-    if (!agent.permissions || typeof agent.permissions !== "object") return false;
-    return Boolean((agent.permissions as Record<string, unknown>).canCreateAgents);
-  }
-
   async function assertCanAssignTasks(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
     if (req.actor.type === "board") {
       if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
       const allowed = await access.canUser(companyId, req.actor.userId, "tasks:assign");
-      if (!allowed) throw forbidden("Missing permission: tasks:assign");
+      if (!allowed) {
+        throw forbidden(
+          "Missing permission: tasks:assign. Open Company Settings -> Access and grant tasks:assign.",
+        );
+      }
       return;
     }
     if (req.actor.type === "agent") {
       if (!req.actor.agentId) throw forbidden("Agent authentication required");
-      const allowedByGrant = await access.hasPermission(companyId, "agent", req.actor.agentId, "tasks:assign");
-      if (allowedByGrant) return;
-      const actorAgent = await agentsSvc.getById(req.actor.agentId);
-      if (actorAgent && actorAgent.companyId === companyId && canCreateAgentsLegacy(actorAgent)) return;
-      throw forbidden("Missing permission: tasks:assign");
+      const permissionStatus = await access.getPermissionStatus(
+        companyId,
+        "agent",
+        req.actor.agentId,
+        "tasks:assign",
+      );
+      if (!permissionStatus.membership || permissionStatus.membership.status !== "active") {
+        throw forbidden(
+          "Agent company access is missing or inactive. Open Company Settings -> Access and make sure this agent has an active membership.",
+        );
+      }
+      if (!permissionStatus.hasGrant) {
+        throw forbidden(
+          "Missing permission: tasks:assign. Open Company Settings -> Access and grant tasks:assign to this agent.",
+        );
+      }
+      return;
     }
     throw unauthorized();
   }

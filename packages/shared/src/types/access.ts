@@ -1,4 +1,6 @@
 import type {
+  AgentRole,
+  AgentStatus,
   AgentAdapterType,
   InstanceUserRole,
   InviteJoinType,
@@ -21,6 +23,16 @@ export interface CompanyMembership {
   updatedAt: Date;
 }
 
+export interface CompanyMemberPrincipal {
+  id: string;
+  type: PrincipalType;
+  name: string | null;
+  email: string | null;
+  title: string | null;
+  role: AgentRole | null;
+  agentStatus: AgentStatus | null;
+}
+
 export interface PrincipalPermissionGrant {
   id: string;
   companyId: string;
@@ -31,6 +43,11 @@ export interface PrincipalPermissionGrant {
   grantedByUserId: string | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface CompanyMemberRecord extends CompanyMembership {
+  grants: PrincipalPermissionGrant[];
+  principal: CompanyMemberPrincipal;
 }
 
 export interface Invite {

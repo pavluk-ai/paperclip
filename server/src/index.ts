@@ -25,7 +25,11 @@ import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { logger } from "./middleware/logger.js";
 import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
-import { heartbeatService, reconcilePersistedRuntimeServicesOnStartup } from "./services/index.js";
+import {
+  heartbeatService,
+  reconcileAgentMembershipDrift,
+  reconcilePersistedRuntimeServicesOnStartup,
+} from "./services/index.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
@@ -420,6 +424,13 @@ export async function startServer(): Promise<StartedServer> {
     | undefined;
   if (config.deploymentMode === "local_trusted") {
     await ensureLocalTrustedBoardPrincipal(db as any);
+  }
+  const repairedAgentMemberships = await reconcileAgentMembershipDrift(db as any);
+  if (repairedAgentMemberships > 0) {
+    logger.warn(
+      { repairedAgentMemberships },
+      "repaired missing agent company memberships at startup",
+    );
   }
   if (config.deploymentMode === "authenticated") {
     const {

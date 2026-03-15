@@ -1,4 +1,10 @@
-import type { AgentAdapterType, JoinRequest } from "@paperclipai/shared";
+import type {
+  AgentAdapterType,
+  CompanyMemberRecord,
+  CompanyMembership,
+  JoinRequest,
+  UpdateMemberPermissions,
+} from "@paperclipai/shared";
 import { api } from "./client";
 
 type InviteSummary = {
@@ -120,6 +126,19 @@ export const accessApi = {
     api.post<{ keyId: string; token: string; agentId: string; createdAt: string }>(
       `/join-requests/${requestId}/claim-api-key`,
       { claimSecret },
+    ),
+
+  listMembers: (companyId: string) =>
+    api.get<CompanyMemberRecord[]>(`/companies/${companyId}/members`),
+
+  updateMemberPermissions: (
+    companyId: string,
+    memberId: string,
+    input: UpdateMemberPermissions,
+  ) =>
+    api.patch<CompanyMembership>(
+      `/companies/${companyId}/members/${memberId}/permissions`,
+      input,
     ),
 
   getBoardClaimStatus: (token: string, code: string) =>

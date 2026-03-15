@@ -8,6 +8,7 @@ import {
   agentRuntimeState,
   agentTaskSessions,
   agentWakeupRequests,
+  companyMemberships,
   heartbeatRunEvents,
   heartbeatRuns,
 } from "@paperclipai/db";
@@ -22,6 +23,12 @@ function hashToken(token: string) {
 
 function createToken() {
   return `pcp_${randomBytes(24).toString("hex")}`;
+}
+
+export function agentMembershipStatusForAgentStatus(status: string): "pending" | "active" | "suspended" {
+  if (status === "pending_approval") return "pending";
+  if (status === "terminated") return "suspended";
+  return "active";
 }
 
 const CONFIG_REVISION_FIELDS = [
@@ -150,6 +157,50 @@ function configPatchFromSnapshot(snapshot: unknown): Partial<typeof agents.$infe
   };
 }
 
+async function ensureAgentMembership(
+  dbOrTx: any,
+  agent: { id: string; companyId: string; status: string },
+) {
+  const status = agentMembershipStatusForAgentStatus(agent.status);
+  const existing = await dbOrTx
+    .select({ id: companyMemberships.id })
+    .from(companyMemberships)
+    .where(
+      and(
+        eq(companyMemberships.companyId, agent.companyId),
+        eq(companyMemberships.principalType, "agent"),
+        eq(companyMemberships.principalId, agent.id),
+      ),
+    )
+    .then((rows: Array<{ id: string }>) => rows[0] ?? null);
+  if (existing) {
+    await dbOrTx
+      .update(companyMemberships)
+      .set({ status, membershipRole: "member", updatedAt: new Date() })
+      .where(eq(companyMemberships.id, existing.id));
+    return;
+  }
+  await dbOrTx.insert(companyMemberships).values({
+    companyId: agent.companyId,
+    principalType: "agent",
+    principalId: agent.id,
+    status,
+    membershipRole: "member",
+  });
+}
+
+async function deleteAgentMembership(dbOrTx: any, companyId: string, agentId: string) {
+  await dbOrTx
+    .delete(companyMemberships)
+    .where(
+      and(
+        eq(companyMemberships.companyId, companyId),
+        eq(companyMemberships.principalType, "agent"),
+        eq(companyMemberships.principalId, agentId),
+      ),
+    );
+}
+
 export function hasAgentShortnameCollision(
   candidateName: string,
   existingAgents: AgentShortnameRow[],
@@ -179,6 +230,42 @@ export function deduplicateAgentName(
     }
   }
   return `${candidateName} ${Date.now()}`;
+}
+
+export async function reconcileAgentMembershipDrift(db: Db): Promise<number> {
+  const [agentRows, memberships] = await Promise.all([
+    db
+      .select({
+        id: agents.id,
+        companyId: agents.companyId,
+        status: agents.status,
+      })
+      .from(agents),
+    db
+      .select({
+        companyId: companyMemberships.companyId,
+        principalId: companyMemberships.principalId,
+      })
+      .from(companyMemberships)
+      .where(eq(companyMemberships.principalType, "agent")),
+  ]);
+
+  const membershipKeys = new Set(
+    memberships.map((membership) => `${membership.companyId}:${membership.principalId}`),
+  );
+  const missing = agentRows
+    .filter((agent) => !membershipKeys.has(`${agent.companyId}:${agent.id}`))
+    .map((agent) => ({
+      companyId: agent.companyId,
+      principalType: "agent" as const,
+      principalId: agent.id,
+      status: agentMembershipStatusForAgentStatus(agent.status),
+      membershipRole: "member",
+    }));
+
+  if (missing.length === 0) return 0;
+  await db.insert(companyMemberships).values(missing);
+  return missing.length;
 }
 
 export function agentService(db: Db) {
@@ -295,33 +382,44 @@ export function agentService(db: Db) {
     const shouldRecordRevision = Boolean(options?.recordRevision) && hasConfigPatchFields(normalizedPatch);
     const beforeConfig = shouldRecordRevision ? buildConfigSnapshot(existing) : null;
 
-    const updated = await db
-      .update(agents)
-      .set({ ...normalizedPatch, updatedAt: new Date() })
-      .where(eq(agents.id, id))
-      .returning()
-      .then((rows) => rows[0] ?? null);
-    const normalizedUpdated = updated ? normalizeAgentRow(updated) : null;
+    const runUpdate = async (dbOrTx: any) => {
+      const updated = await dbOrTx
+        .update(agents)
+        .set({ ...normalizedPatch, updatedAt: new Date() })
+        .where(eq(agents.id, id))
+        .returning()
+        .then((rows: Array<typeof agents.$inferSelect>) => rows[0] ?? null);
+      const normalizedUpdated = updated ? normalizeAgentRow(updated) : null;
 
-    if (normalizedUpdated && shouldRecordRevision && beforeConfig) {
-      const afterConfig = buildConfigSnapshot(normalizedUpdated);
-      const changedKeys = diffConfigSnapshot(beforeConfig, afterConfig);
-      if (changedKeys.length > 0) {
-        await db.insert(agentConfigRevisions).values({
-          companyId: normalizedUpdated.companyId,
-          agentId: normalizedUpdated.id,
-          createdByAgentId: options?.recordRevision?.createdByAgentId ?? null,
-          createdByUserId: options?.recordRevision?.createdByUserId ?? null,
-          source: options?.recordRevision?.source ?? "patch",
-          rolledBackFromRevisionId: options?.recordRevision?.rolledBackFromRevisionId ?? null,
-          changedKeys,
-          beforeConfig: beforeConfig as unknown as Record<string, unknown>,
-          afterConfig: afterConfig as unknown as Record<string, unknown>,
-        });
+      if (updated && data.status !== undefined) {
+        await ensureAgentMembership(dbOrTx, updated);
       }
-    }
 
-    return normalizedUpdated;
+      if (normalizedUpdated && shouldRecordRevision && beforeConfig) {
+        const afterConfig = buildConfigSnapshot(normalizedUpdated);
+        const changedKeys = diffConfigSnapshot(beforeConfig, afterConfig);
+        if (changedKeys.length > 0) {
+          await dbOrTx.insert(agentConfigRevisions).values({
+            companyId: normalizedUpdated.companyId,
+            agentId: normalizedUpdated.id,
+            createdByAgentId: options?.recordRevision?.createdByAgentId ?? null,
+            createdByUserId: options?.recordRevision?.createdByUserId ?? null,
+            source: options?.recordRevision?.source ?? "patch",
+            rolledBackFromRevisionId: options?.recordRevision?.rolledBackFromRevisionId ?? null,
+            changedKeys,
+            beforeConfig: beforeConfig as unknown as Record<string, unknown>,
+            afterConfig: afterConfig as unknown as Record<string, unknown>,
+          });
+        }
+      }
+
+      return normalizedUpdated;
+    };
+
+    if (data.status !== undefined) {
+      return db.transaction(runUpdate);
+    }
+    return runUpdate(db);
   }
 
   return {
@@ -349,11 +447,15 @@ export function agentService(db: Db) {
 
       const role = data.role ?? "general";
       const normalizedPermissions = normalizeAgentPermissions(data.permissions, role);
-      const created = await db
-        .insert(agents)
-        .values({ ...data, name: uniqueName, companyId, role, permissions: normalizedPermissions })
-        .returning()
-        .then((rows) => rows[0]);
+      const created = await db.transaction(async (tx) => {
+        const row = await tx
+          .insert(agents)
+          .values({ ...data, name: uniqueName, companyId, role, permissions: normalizedPermissions })
+          .returning()
+          .then((rows: Array<typeof agents.$inferSelect>) => rows[0]);
+        await ensureAgentMembership(tx, row);
+        return row;
+      });
 
       return normalizeAgentRow(created);
     },
@@ -395,17 +497,23 @@ export function agentService(db: Db) {
       const existing = await getById(id);
       if (!existing) return null;
 
-      await db
-        .update(agents)
-        .set({ status: "terminated", updatedAt: new Date() })
-        .where(eq(agents.id, id));
+      const updated = await db.transaction(async (tx) => {
+        const row = await tx
+          .update(agents)
+          .set({ status: "terminated", updatedAt: new Date() })
+          .where(eq(agents.id, id))
+          .returning()
+          .then((rows: Array<typeof agents.$inferSelect>) => rows[0] ?? null);
+        if (!row) return null;
+        await ensureAgentMembership(tx, row);
+        await tx
+          .update(agentApiKeys)
+          .set({ revokedAt: new Date() })
+          .where(eq(agentApiKeys.agentId, id));
+        return row;
+      });
 
-      await db
-        .update(agentApiKeys)
-        .set({ revokedAt: new Date() })
-        .where(eq(agentApiKeys.agentId, id));
-
-      return getById(id);
+      return updated ? normalizeAgentRow(updated) : null;
     },
 
     remove: async (id: string) => {
@@ -420,6 +528,7 @@ export function agentService(db: Db) {
         await tx.delete(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, id));
         await tx.delete(agentApiKeys).where(eq(agentApiKeys.agentId, id));
         await tx.delete(agentRuntimeState).where(eq(agentRuntimeState.agentId, id));
+        await deleteAgentMembership(tx, existing.companyId, id);
         const deleted = await tx
           .delete(agents)
           .where(eq(agents.id, id))
@@ -434,12 +543,17 @@ export function agentService(db: Db) {
       if (!existing) return null;
       if (existing.status !== "pending_approval") return existing;
 
-      const updated = await db
-        .update(agents)
-        .set({ status: "idle", updatedAt: new Date() })
-        .where(eq(agents.id, id))
-        .returning()
-        .then((rows) => rows[0] ?? null);
+      const updated = await db.transaction(async (tx) => {
+        const row = await tx
+          .update(agents)
+          .set({ status: "idle", updatedAt: new Date() })
+          .where(eq(agents.id, id))
+          .returning()
+          .then((rows: Array<typeof agents.$inferSelect>) => rows[0] ?? null);
+        if (!row) return null;
+        await ensureAgentMembership(tx, row);
+        return row;
+      });
 
       return updated ? normalizeAgentRow(updated) : null;
     },

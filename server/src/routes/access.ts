@@ -2354,13 +2354,6 @@ export function accessRoutes(
           metadata: null
         });
         createdAgentId = created.id;
-        await access.ensureMembership(
-          companyId,
-          "agent",
-          created.id,
-          "member",
-          "active"
-        );
         const grants = grantsFromDefaults(
           invite.defaultsPayload as Record<string, unknown> | null,
           "agent"

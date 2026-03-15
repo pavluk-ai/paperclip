@@ -143,6 +143,8 @@ export type {
   ActivityEvent,
   SidebarBadges,
   CompanyMembership,
+  CompanyMemberPrincipal,
+  CompanyMemberRecord,
   PrincipalPermissionGrant,
   Invite,
   JoinRequest,

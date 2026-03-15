@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { companiesApi } from "../api/companies";
+import { agentsApi } from "../api/agents";
 import { accessApi } from "../api/access";
 import { queryKeys } from "../lib/queryKeys";
 import { Button } from "@/components/ui/button";
 import { Settings, Check } from "lucide-react";
+import { PERMISSION_KEYS, type CompanyMemberRecord, type PermissionKey } from "@paperclipai/shared";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
+import { StatusBadge } from "../components/StatusBadge";
 import {
   Field,
   ToggleField,
@@ -19,6 +22,19 @@ type AgentSnippetInput = {
   connectionCandidates?: string[] | null;
   testResolutionUrl?: string | null;
 };
+
+const permissionLabels: Record<PermissionKey, string> = {
+  "agents:create": "agents:create",
+  "users:invite": "users:invite",
+  "users:manage_permissions": "manage access",
+  "tasks:assign": "tasks:assign",
+  "tasks:assign_scope": "assign scope",
+  "joins:approve": "joins:approve",
+};
+
+function memberDisplayName(member: CompanyMemberRecord) {
+  return member.principal.name ?? member.principal.email ?? member.principalId;
+}
 
 export function CompanySettings() {
   const {
@@ -162,6 +178,33 @@ export function CompanySettings() {
     ]);
   }, [setBreadcrumbs, selectedCompany?.name]);
 
+  const { data: members, error: membersError, isLoading: membersLoading } = useQuery({
+    queryKey: selectedCompanyId ? queryKeys.access.members(selectedCompanyId) : ["access", "members", "none"],
+    queryFn: () => accessApi.listMembers(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+  });
+
+  const { data: companyAgents } = useQuery({
+    queryKey: selectedCompanyId ? queryKeys.agents.list(selectedCompanyId) : ["agents", "none"],
+    queryFn: () => agentsApi.list(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+  });
+
+  const updateMemberPermissions = useMutation({
+    mutationFn: ({
+      memberId,
+      grants,
+    }: {
+      memberId: string;
+      grants: Array<{ permissionKey: PermissionKey; scope?: Record<string, unknown> | null }>;
+    }) => accessApi.updateMemberPermissions(selectedCompanyId!, memberId, { grants }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.access.members(selectedCompanyId!),
+      });
+    },
+  });
+
   if (!selectedCompany) {
     return (
       <div className="text-sm text-muted-foreground">
@@ -177,6 +220,29 @@ export function CompanySettings() {
       brandColor: brandColor || null
     });
   }
+
+  function toggleMemberPermission(member: CompanyMemberRecord, permissionKey: PermissionKey) {
+    const hasPermission = member.grants.some((grant) => grant.permissionKey === permissionKey);
+    const grants = hasPermission
+      ? member.grants
+          .filter((grant) => grant.permissionKey !== permissionKey)
+          .map((grant) => ({ permissionKey: grant.permissionKey, scope: grant.scope ?? null }))
+      : [
+          ...member.grants.map((grant) => ({
+            permissionKey: grant.permissionKey,
+            scope: grant.scope ?? null,
+          })),
+          { permissionKey, scope: null },
+        ];
+    updateMemberPermissions.mutate({ memberId: member.id, grants });
+  }
+
+  const agentMemberIds = new Set(
+    (members ?? [])
+      .filter((member) => member.principalType === "agent")
+      .map((member) => member.principalId),
+  );
+  const missingAccessAgents = (companyAgents ?? []).filter((agent) => !agentMemberIds.has(agent.id));
 
   return (
     <div className="max-w-2xl space-y-6">
@@ -304,6 +370,102 @@ export function CompanySettings() {
             checked={!!selectedCompany.requireBoardApprovalForNewAgents}
             onChange={(v) => settingsMutation.mutate(v)}
           />
+        </div>
+      </div>
+
+      <div id="access" className="space-y-4">
+        <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+          Access
+        </div>
+        <div className="space-y-3 rounded-md border border-border px-4 py-4">
+          <p className="text-sm text-muted-foreground">
+            Company memberships and explicit grants for both users and agents.
+          </p>
+          {membersLoading && (
+            <p className="text-sm text-muted-foreground">Loading access...</p>
+          )}
+          {membersError && (
+            <p className="text-sm text-destructive">
+              {membersError instanceof Error
+                ? membersError.message
+                : "Failed to load company access"}
+            </p>
+          )}
+          {!membersLoading && !membersError && (
+            <div className="space-y-3">
+              {(members ?? []).map((member) => {
+                const busy = updateMemberPermissions.isPending && updateMemberPermissions.variables?.memberId === member.id;
+                return (
+                  <div key={member.id} className="rounded-md border border-border px-3 py-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="space-y-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-medium">{memberDisplayName(member)}</span>
+                          <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                            {member.principalType}
+                          </span>
+                          <StatusBadge status={member.status} />
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {member.principal.email ?? member.principal.title ?? member.principalId}
+                          {member.principal.role ? ` · ${member.principal.role}` : ""}
+                          {member.principal.agentStatus ? ` · agent ${member.principal.agentStatus}` : ""}
+                        </div>
+                      </div>
+                      {busy && (
+                        <span className="text-xs text-muted-foreground">Saving…</span>
+                      )}
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      {PERMISSION_KEYS.map((permissionKey) => {
+                        const enabled = member.grants.some((grant) => grant.permissionKey === permissionKey);
+                        return (
+                          <Button
+                            key={permissionKey}
+                            size="sm"
+                            variant={enabled ? "default" : "outline"}
+                            className="h-7 px-2.5 text-xs"
+                            onClick={() => toggleMemberPermission(member, permissionKey)}
+                            disabled={busy}
+                          >
+                            {permissionLabels[permissionKey]}
+                          </Button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+              {members && members.length === 0 && missingAccessAgents.length === 0 && (
+                <p className="text-sm text-muted-foreground">No company memberships yet.</p>
+              )}
+              {missingAccessAgents.length > 0 && (
+                <div className="rounded-md border border-amber-300 bg-amber-50/70 px-3 py-3">
+                  <div className="text-sm font-medium text-amber-900">Access drift detected</div>
+                  <div className="mt-2 space-y-2">
+                    {missingAccessAgents.map((agent) => (
+                      <div key={agent.id} className="text-sm text-amber-950">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-medium">{agent.name}</span>
+                          <StatusBadge status={agent.status} />
+                        </div>
+                        <div className="text-xs text-amber-900/80">
+                          This agent exists in the company roster but has no company access membership row.
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {updateMemberPermissions.isError && (
+                <p className="text-xs text-destructive">
+                  {updateMemberPermissions.error instanceof Error
+                    ? updateMemberPermissions.error.message
+                    : "Failed to update member permissions"}
+                </p>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
