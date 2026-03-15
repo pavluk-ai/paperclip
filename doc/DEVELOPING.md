@@ -126,6 +126,8 @@ This path honors `PAPERCLIP_HOME` and `PAPERCLIP_INSTANCE_ID` in non-default set
 
 ## Worktree-local Instances
 
+For this fork's local Git sync workflow, see `README-fork.md`.
+
 When developing from multiple git worktrees, do not point two Paperclip servers at the same embedded PostgreSQL data directory.
 
 Instead, create a repo-local Paperclip config plus an isolated instance for the worktree:
