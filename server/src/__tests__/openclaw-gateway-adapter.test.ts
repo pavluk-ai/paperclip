@@ -594,6 +594,9 @@ describe("openclaw gateway ui build config", () => {
     expect(config).toEqual(
       expect.objectContaining({
         url: "wss://gateway.example/ws",
+        agentId: "remote-agent-123",
+        sessionKeyStrategy: "fixed",
+        sessionKey: "agent:remote-agent-123:paperclip",
         payloadTemplate: {
           agentId: "remote-agent-123",
           metadata: { team: "platform" },

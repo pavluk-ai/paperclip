@@ -30,6 +30,7 @@ Gateway connect identity fields:
 - disableDeviceAuth (boolean, optional): disable signed device payload in connect params (default false)
 
 Request behavior fields:
+- agentId (string, optional): preferred OpenClaw persona id for persona-bound routing
 - payloadTemplate (object, optional): additional fields merged into gateway agent params
 - workspaceRuntime (object, optional): desired runtime service intents; Paperclip forwards these in a standardized paperclip.workspaceRuntime block for remote execution environments
 - timeoutSec (number, optional): adapter timeout in seconds (default 120)
@@ -38,8 +39,13 @@ Request behavior fields:
 - paperclipApiUrl (string, optional): absolute Paperclip base URL advertised in wake text
 
 Session routing fields:
-- sessionKeyStrategy (string, optional): issue (default), fixed, or run
+- sessionKeyStrategy (string, optional): issue (legacy shared-session default), fixed, or run
 - sessionKey (string, optional): fixed session key when strategy=fixed (default paperclip)
+
+Recommended multi-company relay pattern:
+- set agentId to the intended OpenClaw persona id
+- keep payloadTemplate.agentId aligned with the same persona id when you use payloadTemplate
+- for dedicated non-main personas, prefer sessionKeyStrategy=fixed and sessionKey=agent:<persona-id>:paperclip
 
 Standard outbound payload additions:
 - paperclip (object): standardized Paperclip context added to every gateway agent request

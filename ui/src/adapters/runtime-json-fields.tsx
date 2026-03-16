@@ -115,7 +115,7 @@ export function PayloadTemplateJsonField({
           if (!isCreate) setDraft(next);
           updateJsonConfig(isCreate, "payloadTemplateJson", next, set, mark, "payloadTemplate");
         }}
-        placeholder={`{\n  "agentId": "remote-agent-123",\n  "metadata": {\n    "team": "platform"\n  }\n}`}
+        placeholder={`{\n  "agentId": "client-a",\n  "deliver": true,\n  "replyChannel": "telegram",\n  "replyTo": "<telegram-group-chat-id>",\n  "threadId": "<telegram-topic-thread-id>"\n}`}
       />
     </Field>
   );

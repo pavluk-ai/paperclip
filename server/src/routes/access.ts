@@ -321,6 +321,128 @@ function parseBooleanLike(value: unknown): boolean | null {
   return null;
 }
 
+function normalizeThreadIdLike(
+  value: unknown
+): string | number | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.trunc(value);
+  }
+  return null;
+}
+
+function normalizeOpenClawPayloadTemplate(input: {
+  payloadTemplate: unknown;
+  configuredAgentId: string | null;
+  diagnostics: JoinDiagnostic[];
+  fatalErrors: string[];
+}) {
+  if (!isPlainObject(input.payloadTemplate)) {
+    return {
+      normalized: null as Record<string, unknown> | null,
+      payloadAgentId: null as string | null,
+      telegramTargeting: false
+    };
+  }
+
+  const normalized = {
+    ...(input.payloadTemplate as Record<string, unknown>)
+  };
+  const payloadAgentId = nonEmptyTrimmedString(normalized.agentId);
+
+  if (
+    input.configuredAgentId &&
+    payloadAgentId &&
+    payloadAgentId !== input.configuredAgentId
+  ) {
+    input.diagnostics.push({
+      code: "openclaw_gateway_agent_id_mismatch",
+      level: "warn",
+      message:
+        "agentDefaultsPayload.agentId and payloadTemplate.agentId must match for OpenClaw gateway joins.",
+      hint:
+        "Use the same OpenClaw persona id in both fields so persona routing and delivery targeting stay aligned."
+    });
+    input.fatalErrors.push(
+      "agentDefaultsPayload.agentId and payloadTemplate.agentId must match"
+    );
+  }
+
+  const effectiveAgentId = input.configuredAgentId ?? payloadAgentId;
+  if (effectiveAgentId && !payloadAgentId) {
+    normalized.agentId = effectiveAgentId;
+  }
+
+  const replyChannel = nonEmptyTrimmedString(normalized.replyChannel);
+  const replyTo = nonEmptyTrimmedString(normalized.replyTo);
+  const threadId = normalizeThreadIdLike(normalized.threadId);
+  const telegramTargeting =
+    replyChannel === "telegram" || Boolean(replyTo) || threadId !== null;
+
+  if (threadId !== null) {
+    normalized.threadId = threadId;
+  } else if (Object.prototype.hasOwnProperty.call(normalized, "threadId")) {
+    delete normalized.threadId;
+  }
+
+  if (
+    (replyTo || threadId !== null) &&
+    replyChannel &&
+    replyChannel !== "telegram"
+  ) {
+    input.diagnostics.push({
+      code: "openclaw_gateway_payload_reply_channel_invalid",
+      level: "warn",
+      message:
+        "Telegram reply targeting requires payloadTemplate.replyChannel to be \"telegram\".",
+      hint:
+        "Set payloadTemplate.replyChannel to \"telegram\" or remove replyTo/threadId delivery targeting fields."
+    });
+    input.fatalErrors.push(
+      "payloadTemplate.replyChannel must be \"telegram\" when replyTo/threadId are set"
+    );
+  }
+
+  if (telegramTargeting) {
+    if (!replyChannel) {
+      normalized.replyChannel = "telegram";
+      input.diagnostics.push({
+        code: "openclaw_gateway_payload_reply_channel_defaulted",
+        level: "info",
+        message:
+          "Defaulted payloadTemplate.replyChannel to \"telegram\" because Telegram delivery targeting was configured."
+      });
+    }
+    if (parseBooleanLike(normalized.deliver) !== true) {
+      normalized.deliver = true;
+      input.diagnostics.push({
+        code: "openclaw_gateway_payload_deliver_defaulted",
+        level: "info",
+        message:
+          "Defaulted payloadTemplate.deliver to true because Telegram delivery targeting was configured."
+      });
+    }
+    if (threadId !== null && !replyTo) {
+      input.diagnostics.push({
+        code: "openclaw_gateway_payload_reply_to_missing",
+        level: "warn",
+        message:
+          "payloadTemplate.threadId was provided without payloadTemplate.replyTo.",
+        hint:
+          "For Telegram topic delivery, include the target group chat id in payloadTemplate.replyTo."
+      });
+      input.fatalErrors.push(
+        "payloadTemplate.replyTo is required when payloadTemplate.threadId is set"
+      );
+    }
+  }
+
+  return { normalized, payloadAgentId, telegramTargeting };
+}
+
 function generateEd25519PrivateKeyPem(): string {
   const generated = generateKeyPairSync("ed25519");
   return generated.privateKey
@@ -476,6 +598,10 @@ function summarizeOpenClawGatewayDefaultsForLog(defaultsPayload: unknown) {
     ? (defaultsPayload as Record<string, unknown>)
     : null;
   const headers = defaults ? normalizeHeaderMap(defaults.headers) : undefined;
+  const payloadTemplate =
+    defaults && isPlainObject(defaults.payloadTemplate)
+      ? (defaults.payloadTemplate as Record<string, unknown>)
+      : null;
   const gatewayTokenValue = headers
     ? headerMapGetIgnoreCase(headers, "x-openclaw-token") ??
       headerMapGetIgnoreCase(headers, "x-openclaw-auth") ??
@@ -490,10 +616,12 @@ function summarizeOpenClawGatewayDefaultsForLog(defaultsPayload: unknown) {
     paperclipApiUrl: defaults
       ? nonEmptyTrimmedString(defaults.paperclipApiUrl)
       : null,
+    agentId: defaults ? nonEmptyTrimmedString(defaults.agentId) : null,
     headerKeys: headers ? Object.keys(headers).sort() : [],
     sessionKeyStrategy: defaults
       ? nonEmptyTrimmedString(defaults.sessionKeyStrategy)
       : null,
+    sessionKey: defaults ? nonEmptyTrimmedString(defaults.sessionKey) : null,
     disableDeviceAuth: defaults
       ? parseBooleanLike(defaults.disableDeviceAuth)
       : null,
@@ -501,6 +629,21 @@ function summarizeOpenClawGatewayDefaultsForLog(defaultsPayload: unknown) {
       defaults && typeof defaults.waitTimeoutMs === "number"
         ? defaults.waitTimeoutMs
         : null,
+    payloadTemplateAgentId: payloadTemplate
+      ? nonEmptyTrimmedString(payloadTemplate.agentId)
+      : null,
+    payloadTemplateDeliver: payloadTemplate
+      ? parseBooleanLike(payloadTemplate.deliver)
+      : null,
+    payloadTemplateReplyChannel: payloadTemplate
+      ? nonEmptyTrimmedString(payloadTemplate.replyChannel)
+      : null,
+    payloadTemplateReplyTo: payloadTemplate
+      ? nonEmptyTrimmedString(payloadTemplate.replyTo)
+      : null,
+    payloadTemplateThreadId: payloadTemplate
+      ? normalizeThreadIdLike(payloadTemplate.threadId)
+      : null,
     devicePrivateKeyPem: defaults
       ? summarizeSecretForLog(defaults.devicePrivateKeyPem)
       : null,
@@ -629,8 +772,37 @@ export function normalizeAgentDefaultsForJoin(input: {
     });
   }
 
-  if (isPlainObject(defaults.payloadTemplate)) {
-    normalized.payloadTemplate = defaults.payloadTemplate;
+  const configuredAgentId = nonEmptyTrimmedString(defaults.agentId);
+  const payloadTemplate = normalizeOpenClawPayloadTemplate({
+    payloadTemplate: defaults.payloadTemplate,
+    configuredAgentId,
+    diagnostics,
+    fatalErrors
+  });
+  const effectiveAgentId = configuredAgentId ?? payloadTemplate.payloadAgentId;
+  if (payloadTemplate.normalized) {
+    normalized.payloadTemplate = payloadTemplate.normalized;
+  }
+  if (effectiveAgentId) {
+    normalized.agentId = effectiveAgentId;
+    diagnostics.push({
+      code:
+        configuredAgentId || payloadTemplate.payloadAgentId
+          ? "openclaw_gateway_agent_id_configured"
+          : "openclaw_gateway_agent_id_derived",
+      level: "info",
+      message: `OpenClaw persona binding set to ${effectiveAgentId}.`
+    });
+  }
+  if (payloadTemplate.telegramTargeting && !effectiveAgentId) {
+    diagnostics.push({
+      code: "openclaw_gateway_payload_agent_id_missing",
+      level: "warn",
+      message:
+        "Telegram delivery targeting is configured without agentDefaultsPayload.agentId.",
+      hint:
+        "Dedicated multi-company relays should set agentDefaultsPayload.agentId so Paperclip routes wakes into the intended OpenClaw persona."
+    });
   }
 
   const parsedDisableDeviceAuth = parseBooleanLike(defaults.disableDeviceAuth);
@@ -697,17 +869,52 @@ export function normalizeAgentDefaultsForJoin(input: {
   }
 
   const sessionKeyStrategy = nonEmptyTrimmedString(defaults.sessionKeyStrategy);
+  const sessionKey = nonEmptyTrimmedString(defaults.sessionKey);
+  const derivedAgentSessionKey = effectiveAgentId
+    ? `agent:${effectiveAgentId}:paperclip`
+    : null;
+
   if (
     sessionKeyStrategy === "fixed" ||
     sessionKeyStrategy === "issue" ||
     sessionKeyStrategy === "run"
   ) {
-    normalized.sessionKeyStrategy = sessionKeyStrategy;
+    if (effectiveAgentId && effectiveAgentId !== "main" && sessionKeyStrategy === "issue") {
+      diagnostics.push({
+        code: "openclaw_gateway_session_issue_strategy_non_main",
+        level: "warn",
+        message:
+          "sessionKeyStrategy=\"issue\" is not safe for dedicated non-main OpenClaw personas.",
+        hint:
+          "Use sessionKeyStrategy=\"fixed\" with sessionKey=\"agent:<persona-id>:paperclip\" for dedicated personas."
+      });
+      fatalErrors.push(
+        "agentDefaultsPayload.sessionKeyStrategy=\"issue\" is only supported for intentional main/shared-persona setups"
+      );
+    } else {
+      normalized.sessionKeyStrategy = sessionKeyStrategy;
+    }
+  } else if (effectiveAgentId) {
+    normalized.sessionKeyStrategy = "fixed";
+    diagnostics.push({
+      code: "openclaw_gateway_session_strategy_defaulted",
+      level: "info",
+      message: `Defaulted sessionKeyStrategy to "fixed" for persona ${effectiveAgentId}.`
+    });
   }
 
-  const sessionKey = nonEmptyTrimmedString(defaults.sessionKey);
   if (sessionKey) {
     normalized.sessionKey = sessionKey;
+  } else if (
+    normalized.sessionKeyStrategy === "fixed" &&
+    derivedAgentSessionKey
+  ) {
+    normalized.sessionKey = derivedAgentSessionKey;
+    diagnostics.push({
+      code: "openclaw_gateway_session_key_defaulted",
+      level: "info",
+      message: `Defaulted sessionKey to ${derivedAgentSessionKey}.`
+    });
   }
 
   const role = nonEmptyTrimmedString(defaults.role);
@@ -935,7 +1142,7 @@ function buildInviteOnboardingManifest(
     invite: toInviteSummaryResponse(req, token, invite),
     onboarding: {
       instructions:
-        "Join as an OpenClaw Gateway agent, save your one-time claim secret, wait for board approval, then claim your API key. Save the claim response token to ~/.openclaw/workspace/paperclip-claimed-api-key.json and load PAPERCLIP_API_KEY from that file before starting heartbeat loops. You MUST submit adapterType='openclaw_gateway', set agentDefaultsPayload.url to your ws:// or wss:// OpenClaw gateway endpoint, and include agentDefaultsPayload.headers.x-openclaw-token (or legacy x-openclaw-auth).",
+        "Join as an OpenClaw Gateway agent, wait for board approval, then claim your API key into the current OpenClaw persona workspace as ./paperclip-claimed-api-key.json. Use adapterType='openclaw_gateway', set agentDefaultsPayload.url to your ws:// or wss:// gateway endpoint, include agentDefaultsPayload.headers.x-openclaw-token, bind the join to the intended OpenClaw persona with agentDefaultsPayload.agentId, and for dedicated non-main personas use fixed session routing (sessionKeyStrategy='fixed', sessionKey='agent:<persona-id>:paperclip'). Before heartbeat loops, call GET /api/agents/me with the claimed key and stop if the returned agent/company does not match the intended persona/company.",
       inviteMessage: extractInviteMessage(invite),
       recommendedAdapterType: "openclaw_gateway",
       requiredFields: {
@@ -944,7 +1151,7 @@ function buildInviteOnboardingManifest(
         adapterType: "Use 'openclaw_gateway' for OpenClaw Gateway agents",
         capabilities: "Optional capability summary",
         agentDefaultsPayload:
-          "Adapter config for OpenClaw gateway. MUST include url (ws:// or wss://) and headers.x-openclaw-token (or legacy x-openclaw-auth). Optional fields: paperclipApiUrl, waitTimeoutMs, sessionKeyStrategy, sessionKey, role, scopes, disableDeviceAuth, devicePrivateKeyPem."
+          "Adapter config for OpenClaw gateway. MUST include url (ws:// or wss://), headers.x-openclaw-token (or legacy x-openclaw-auth), and should include agentId for persona-bound routing. Optional fields: paperclipApiUrl, waitTimeoutMs, sessionKeyStrategy, sessionKey, payloadTemplate, role, scopes, disableDeviceAuth, devicePrivateKeyPem."
       },
       registrationEndpoint: {
         method: "POST",
@@ -1064,11 +1271,104 @@ export function buildInviteOnboardingTextDocument(
     3) IMPORTANT: Don't accidentally drop the token when generating JSON
     If you build JSON with Node, pass the token explicitly (argv), don't rely on an un-exported env var.
 
+    Before building the join payload, derive the persona and optional Telegram routing from local OpenClaw config.
+    Run this from the intended OpenClaw persona workspace and do NOT guess if discovery is ambiguous:
+
+    DISCOVERY_JSON="$(node - <<'NODE'
+    const fs = require("fs");
+    const path = require("path");
+
+    const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
+    const cfg = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    const cwd = fs.realpathSync(process.cwd());
+    const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+    const personaMatches = agents.filter((entry) => {
+      if (!entry || typeof entry !== "object") return false;
+      if (typeof entry.id !== "string" || entry.id.trim().length === 0) return false;
+      if (typeof entry.workspace !== "string" || entry.workspace.trim().length === 0) return false;
+      try {
+        return path.resolve(entry.workspace) === cwd;
+      } catch {
+        return false;
+      }
+    });
+
+    if (personaMatches.length !== 1) {
+      console.error(
+        "Expected exactly one persona for workspace " +
+          cwd +
+          "; found " +
+          personaMatches.length +
+          ". Stop and ask the operator."
+      );
+      process.exit(2);
+    }
+
+    const personaId = personaMatches[0].id.trim();
+    const out = { agentId: personaId };
+    if (personaId !== "main") {
+      out.sessionKeyStrategy = "fixed";
+      out.sessionKey = "agent:" + personaId + ":paperclip";
+    }
+
+    const groups =
+      cfg.channels?.telegram?.groups && typeof cfg.channels.telegram.groups === "object"
+        ? cfg.channels.telegram.groups
+        : {};
+    const topicMatches = [];
+    for (const [groupId, groupCfg] of Object.entries(groups)) {
+      const topics =
+        groupCfg && typeof groupCfg === "object" && groupCfg.topics && typeof groupCfg.topics === "object"
+          ? groupCfg.topics
+          : {};
+      for (const [threadId, topicCfg] of Object.entries(topics)) {
+        if (
+          topicCfg &&
+          typeof topicCfg === "object" &&
+          typeof topicCfg.agentId === "string" &&
+          topicCfg.agentId.trim() === personaId
+        ) {
+          topicMatches.push({ replyTo: String(groupId), threadId: String(threadId) });
+        }
+      }
+    }
+
+    if (topicMatches.length === 1) {
+      out.payloadTemplate = {
+        agentId: personaId,
+        deliver: true,
+        replyChannel: "telegram",
+        replyTo: topicMatches[0].replyTo,
+        threadId: topicMatches[0].threadId
+      };
+    } else if (Object.keys(groups).length > 0) {
+      if (topicMatches.length === 0) {
+        console.error(
+          "Telegram is configured but no topic maps to persona " +
+            personaId +
+            ". Stop and ask the operator."
+        );
+      } else {
+        console.error(
+          "Multiple Telegram topics map to persona " +
+            personaId +
+            ". Stop and ask the operator."
+        );
+      }
+      process.exit(3);
+    }
+
+    process.stdout.write(JSON.stringify(out));
+    NODE
+    )"
+
     Safe payload build looks sort of like this (substitute where necessary):
 
     BODY="$(node -e '
       const token = process.argv[1];
-      if (!token) process.exit(2);
+      const discoveryRaw = process.argv[2];
+      if (!token || !discoveryRaw) process.exit(2);
+      const discovery = JSON.parse(discoveryRaw);
       const body = {
         requestType: "agent",
         agentName: "OpenClaw",
@@ -1079,13 +1379,13 @@ export function buildInviteOnboardingTextDocument(
           paperclipApiUrl: "http://host.docker.internal:3100",
           headers: { "x-openclaw-token": token },
           waitTimeoutMs: 120000,
-          sessionKeyStrategy: "issue",
           role: "operator",
-          scopes: ["operator.admin"]
+          scopes: ["operator.admin"],
+          ...discovery
         }
       };
       process.stdout.write(JSON.stringify(body));
-    ' "$TOKEN")"
+    ' "$TOKEN" "$DISCOVERY_JSON")"
 
     ## Step 1: Submit agent join request
     ${onboarding.registrationEndpoint.method} ${
@@ -1095,6 +1395,8 @@ export function buildInviteOnboardingTextDocument(
     IMPORTANT: You MUST include agentDefaultsPayload.headers.x-openclaw-token with your gateway token.
     Legacy x-openclaw-auth is also accepted, but x-openclaw-token is preferred.
     Use adapterType "openclaw_gateway" and a ws:// or wss:// gateway URL.
+    Use one dedicated OpenClaw persona/workspace per Paperclip company unless you intentionally want a shared operator surface.
+    For dedicated non-main personas, set agentDefaultsPayload.agentId and use a fixed session key.
     Pairing mode requirement:
     - Keep device auth enabled (recommended). If devicePrivateKeyPem is omitted, Paperclip generates and persists one during join so pairing approvals are stable.
     - You may set disableDeviceAuth=true only for special environments that cannot support pairing.
@@ -1111,12 +1413,31 @@ export function buildInviteOnboardingTextDocument(
         "url": "wss://your-openclaw-gateway.example",
         "paperclipApiUrl": "https://paperclip-hostname-your-agent-can-reach:3100",
         "headers": { "x-openclaw-token": "replace-me" },
+        "agentId": "<openclaw-persona-id>",
         "waitTimeoutMs": 120000,
-        "sessionKeyStrategy": "issue",
+        "sessionKeyStrategy": "fixed",
+        "sessionKey": "agent:<openclaw-persona-id>:paperclip",
         "role": "operator",
-        "scopes": ["operator.admin"]
+        "scopes": ["operator.admin"],
+        "payloadTemplate": {
+          "agentId": "<openclaw-persona-id>",
+          "deliver": true,
+          "replyChannel": "telegram",
+          "replyTo": "<telegram-group-chat-id>",
+          "threadId": "<telegram-topic-thread-id>"
+        }
       }
     }
+
+    Notes:
+    - Read ~/.openclaw/openclaw.json and resolve the current persona by matching the current workspace path against agents.list[].workspace.
+    - If exactly one Telegram topic in channels.telegram.groups[*].topics maps to that persona, copy its group id into payloadTemplate.replyTo and its topic id into payloadTemplate.threadId.
+    - If Telegram is not configured locally, omit deliver/replyChannel/replyTo/threadId from payloadTemplate.
+    - If persona discovery or Telegram topic discovery is ambiguous, stop and ask the operator instead of guessing.
+    - For dedicated non-main personas, do NOT use sessionKeyStrategy "issue". That causes session routing to collapse back onto "main".
+    - If you intentionally use the default "main" persona as one shared operator surface, sessionKeyStrategy "issue" can still be acceptable, but that is a legacy/shared-session choice.
+    - If you are not using Telegram direct delivery, omit deliver/replyChannel/replyTo/threadId from payloadTemplate.
+    - If both agentDefaultsPayload.agentId and payloadTemplate.agentId are present, they must match.
 
     Expected response includes:
     - request id
@@ -1136,12 +1457,15 @@ export function buildInviteOnboardingTextDocument(
       "claimSecret": "<one-time-claim-secret>"
     }
 
-    On successful claim, save the full JSON response to:
+    On successful claim, save the full JSON response to the current OpenClaw persona workspace as:
 
-    - ~/.openclaw/workspace/paperclip-claimed-api-key.json
-    chmod 600 ~/.openclaw/workspace/paperclip-claimed-api-key.json
+    - ./paperclip-claimed-api-key.json
+    chmod 600 ./paperclip-claimed-api-key.json
 
-    And set the PAPERCLIP_API_KEY and PAPERCLIP_API_URL in your environment variables as specified here:
+    If the current working directory is not the persona workspace, save the file in that persona workspace instead.
+    Never reuse one claimed-key file across multiple companies or personas.
+
+    Then set PAPERCLIP_API_KEY and PAPERCLIP_API_URL in your environment variables as specified here:
     https://docs.openclaw.ai/help/environment
 
     e.g. 
@@ -1153,12 +1477,25 @@ export function buildInviteOnboardingTextDocument(
       },
     }
 
-    Then set PAPERCLIP_API_KEY and PAPERCLIP_API_URL from the saved token field for every heartbeat run.
+    Set PAPERCLIP_API_KEY from the saved token field for every heartbeat run.
 
     Important:
     - claim secrets expire
     - claim secrets are single-use
     - claim fails before board approval
+
+    ## Step 3b: Verify the claimed key before heartbeat loops
+    Load the claimed key from ./paperclip-claimed-api-key.json and call:
+
+    - GET $PAPERCLIP_API_URL/api/agents/me
+
+    Example:
+
+    export PAPERCLIP_API_URL="https://paperclip-hostname-your-agent-can-reach:3100"
+    export PAPERCLIP_API_KEY="$(jq -r '.token' ./paperclip-claimed-api-key.json)"
+    curl -sS -H "Authorization: Bearer $PAPERCLIP_API_KEY" "$PAPERCLIP_API_URL/api/agents/me"
+
+    Stop immediately if the returned agentId or companyId does not match the persona/company you intended to onboard.
 
     ## Step 4: Install Paperclip skill in OpenClaw
     GET ${onboarding.skill.url}

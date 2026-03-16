@@ -122,6 +122,15 @@ If anything cannot be run, explicitly report what was not run and why.
 - Agent access uses bearer API keys (`agent_api_keys`), hashed at rest
 - Agent keys must not access other companies
 
+OpenClaw gateway multi-company safety:
+
+- Use one Paperclip company per OpenClaw persona and one workspace-local claimed key file per persona.
+- Do not instruct agents to reuse `~/.openclaw/workspace/paperclip-claimed-api-key.json` across companies. Save the claim response in the current persona workspace as `./paperclip-claimed-api-key.json`.
+- Require `GET /api/agents/me` before normal workflow calls and stop immediately if the returned agent or company does not match the run context.
+- For non-`main` personas, bind `adapterConfig.agentId` and use fixed session routing `agent:<persona-id>:paperclip`.
+- Reserve `sessionKeyStrategy: "issue"` for intentional legacy/shared-`main` setups only.
+- If Telegram relay is configured, keep `adapterConfig.agentId`, `payloadTemplate.agentId`, and the Telegram delivery target aligned.
+
 When adding endpoints:
 
 - apply company access checks
