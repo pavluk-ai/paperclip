@@ -24,6 +24,8 @@ const mockAgentService = vi.hoisted(() => ({
 const mockProjectService = vi.hoisted(() => ({}));
 const mockGoalService = vi.hoisted(() => ({}));
 const mockIssueApprovalService = vi.hoisted(() => ({}));
+const mockExecutionWorkspaceService = vi.hoisted(() => ({}));
+const mockWorkProductService = vi.hoisted(() => ({}));
 const mockDocumentService = vi.hoisted(() => ({}));
 const mockLogActivity = vi.hoisted(() => vi.fn());
 
@@ -35,6 +37,8 @@ vi.mock("../services/index.js", () => ({
   projectService: () => mockProjectService,
   goalService: () => mockGoalService,
   issueApprovalService: () => mockIssueApprovalService,
+  executionWorkspaceService: () => mockExecutionWorkspaceService,
+  workProductService: () => mockWorkProductService,
   documentService: () => mockDocumentService,
   logActivity: mockLogActivity,
 }));
