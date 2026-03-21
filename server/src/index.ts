@@ -30,6 +30,7 @@ import {
   heartbeatService,
   reconcileAgentMembershipDrift,
   reconcilePersistedRuntimeServicesOnStartup,
+  routineService,
 } from "./services/index.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
@@ -537,6 +538,7 @@ export async function startServer(): Promise<StartedServer> {
   
   if (config.heartbeatSchedulerEnabled) {
     const heartbeat = heartbeatService(db as any);
+    const routines = routineService(db as any);
   
     // Reap orphaned running runs at startup while in-memory execution state is empty,
     // then resume any persisted queued runs that were waiting on the previous process.
@@ -556,6 +558,17 @@ export async function startServer(): Promise<StartedServer> {
         })
         .catch((err) => {
           logger.error({ err }, "heartbeat timer tick failed");
+        });
+
+      void routines
+        .tickScheduledTriggers(new Date())
+        .then((result) => {
+          if (result.triggered > 0) {
+            logger.info({ ...result }, "routine scheduler tick enqueued runs");
+          }
+        })
+        .catch((err) => {
+          logger.error({ err }, "routine scheduler tick failed");
         });
   
       // Periodically reap orphaned runs (5-min staleness threshold) and make sure

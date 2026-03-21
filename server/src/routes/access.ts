@@ -2780,6 +2780,21 @@ export function accessRoutes(
           metadata: null
         });
         createdAgentId = created.id;
+        await access.ensureMembership(
+          companyId,
+          "agent",
+          created.id,
+          "member",
+          "active"
+        );
+        await access.setPrincipalPermission(
+          companyId,
+          "agent",
+          created.id,
+          "tasks:assign",
+          true,
+          req.actor.userId ?? null
+        );
         const grants = grantsFromDefaults(
           invite.defaultsPayload as Record<string, unknown> | null,
           "agent"

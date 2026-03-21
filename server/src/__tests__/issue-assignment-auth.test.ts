@@ -27,6 +27,9 @@ const mockIssueApprovalService = vi.hoisted(() => ({}));
 const mockExecutionWorkspaceService = vi.hoisted(() => ({}));
 const mockWorkProductService = vi.hoisted(() => ({}));
 const mockDocumentService = vi.hoisted(() => ({}));
+const mockRoutineService = vi.hoisted(() => ({
+  syncRunStatusForIssue: vi.fn(),
+}));
 const mockLogActivity = vi.hoisted(() => vi.fn());
 
 vi.mock("../services/index.js", () => ({
@@ -40,6 +43,7 @@ vi.mock("../services/index.js", () => ({
   executionWorkspaceService: () => mockExecutionWorkspaceService,
   workProductService: () => mockWorkProductService,
   documentService: () => mockDocumentService,
+  routineService: () => mockRoutineService,
   logActivity: mockLogActivity,
 }));
 
@@ -80,6 +84,7 @@ describe("issue assignment auth", () => {
       assigneeUserId: null,
     });
     mockLogActivity.mockResolvedValue(undefined);
+    mockRoutineService.syncRunStatusForIssue.mockResolvedValue(undefined);
   });
 
   it("returns a membership-specific error when the acting agent has no active membership", async () => {
