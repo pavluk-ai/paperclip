@@ -15,6 +15,10 @@ const inputClass =
 const instructionsFileHint =
   "Absolute path to a markdown file (e.g. AGENTS.md) that defines this agent's behavior. Injected into the system prompt at runtime.";
 
+export function isClaudeSkipPermissionsPersistedEnabled(config: Record<string, unknown>): boolean {
+  return config.dangerouslySkipPermissions === true;
+}
+
 export function ClaudeLocalConfigFields({
   mode,
   isCreate,
@@ -103,7 +107,7 @@ export function ClaudeLocalAdvancedFields({
             : eff(
                 "adapterConfig",
                 "dangerouslySkipPermissions",
-                config.dangerouslySkipPermissions !== false,
+                isClaudeSkipPermissionsPersistedEnabled(config),
               )
         }
         onChange={(v) =>

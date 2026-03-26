@@ -279,7 +279,10 @@ export function CompanySettings() {
       .filter((member) => member.principalType === "agent")
       .map((member) => member.principalId),
   );
-  const missingAccessAgents = (companyAgents ?? []).filter((agent) => !agentMemberIds.has(agent.id));
+  const missingAccessAgents =
+    membersLoading || membersError
+      ? []
+      : (companyAgents ?? []).filter((agent) => !agentMemberIds.has(agent.id));
 
   return (
     <div className="max-w-2xl space-y-6">

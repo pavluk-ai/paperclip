@@ -594,6 +594,7 @@ export function AgentDetail() {
     queryFn: () => accessApi.listMembers(resolvedCompanyId!),
     enabled: !!resolvedCompanyId,
   });
+  const membersLoading = Boolean(resolvedCompanyId) && !members && !membersError;
 
   const { data: budgetOverview } = useQuery({
     queryKey: queryKeys.budgets.overview(resolvedCompanyId ?? "__none__"),
@@ -1012,6 +1013,7 @@ export function AgentDetail() {
           agentRouteId={canonicalAgentRef}
           accessMembership={accessMembership}
           accessError={accessError}
+          accessLoading={membersLoading}
         />
       )}
 
@@ -1038,6 +1040,7 @@ export function AgentDetail() {
           updatePermissions={updatePermissions}
           accessMembership={accessMembership}
           accessError={accessError}
+          accessLoading={membersLoading}
         />
       )}
 
@@ -1088,13 +1091,16 @@ function AgentAccessCard({
   agent,
   accessMembership,
   accessError,
+  accessLoading,
 }: {
   agent: Agent;
   accessMembership: CompanyMemberRecord | null;
   accessError: Error | null;
+  accessLoading: boolean;
 }) {
   const runtimeAccessible = agent.status !== "pending_approval" && agent.status !== "terminated";
-  const showWarning = runtimeAccessible && (!accessMembership || accessMembership.status !== "active");
+  const showWarning =
+    !accessLoading && runtimeAccessible && (!accessMembership || accessMembership.status !== "active");
 
   return (
     <div
@@ -1109,6 +1115,8 @@ function AgentAccessCard({
       </div>
       {accessError ? (
         <p className="mt-2 text-sm text-destructive">{accessError.message}</p>
+      ) : accessLoading ? (
+        <p className="mt-2 text-sm text-muted-foreground">Loading company access membership…</p>
       ) : accessMembership ? (
         <>
           <p className="mt-2 text-sm text-muted-foreground">
@@ -1235,6 +1243,7 @@ function AgentOverview({
   agentRouteId,
   accessMembership,
   accessError,
+  accessLoading,
 }: {
   agent: AgentDetailRecord;
   runs: HeartbeatRun[];
@@ -1244,6 +1253,7 @@ function AgentOverview({
   agentRouteId: string;
   accessMembership: CompanyMemberRecord | null;
   accessError: Error | null;
+  accessLoading: boolean;
 }) {
   return (
     <div className="space-y-8">
@@ -1254,6 +1264,7 @@ function AgentOverview({
         agent={agent}
         accessMembership={accessMembership}
         accessError={accessError}
+        accessLoading={accessLoading}
       />
 
       {/* Charts */}
@@ -1405,6 +1416,7 @@ function AgentConfigurePage({
   updatePermissions,
   accessMembership,
   accessError,
+  accessLoading,
 }: {
   agent: AgentDetailRecord;
   agentId: string;
@@ -1416,6 +1428,7 @@ function AgentConfigurePage({
   updatePermissions: { mutate: (permissions: AgentPermissionUpdate) => void; isPending: boolean };
   accessMembership: CompanyMemberRecord | null;
   accessError: Error | null;
+  accessLoading: boolean;
 }) {
   const queryClient = useQueryClient();
   const [revisionsOpen, setRevisionsOpen] = useState(false);
@@ -1446,6 +1459,7 @@ function AgentConfigurePage({
         companyId={companyId}
         accessMembership={accessMembership}
         accessError={accessError}
+        accessLoading={accessLoading}
         hidePromptTemplate
         hideInstructionsFile
       />
@@ -1520,6 +1534,7 @@ function ConfigurationTab({
   updatePermissions,
   accessMembership,
   accessError,
+  accessLoading,
   hidePromptTemplate,
   hideInstructionsFile,
 }: {
@@ -1532,6 +1547,7 @@ function ConfigurationTab({
   updatePermissions: { mutate: (permissions: AgentPermissionUpdate) => void; isPending: boolean };
   accessMembership: CompanyMemberRecord | null;
   accessError: Error | null;
+  accessLoading: boolean;
   hidePromptTemplate?: boolean;
   hideInstructionsFile?: boolean;
 }) {
@@ -1603,6 +1619,7 @@ function ConfigurationTab({
         agent={agent}
         accessMembership={accessMembership}
         accessError={accessError}
+        accessLoading={accessLoading}
       />
       <AgentConfigForm
         mode="edit"

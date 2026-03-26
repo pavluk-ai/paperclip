@@ -599,4 +599,65 @@ describe("deferred issue handoff recovery", () => {
 
     await heartbeat.cancelActiveForAgent(agent.id);
   }, 20_000);
+
+  it("starts the next queued run for the agent after cancelling a stale running run", async () => {
+    const connectionString = await createTempDatabase();
+    await applyPendingMigrations(connectionString);
+    const db = createDb(connectionString);
+    const heartbeat = heartbeatService(db);
+
+    const company = await insertCompany(db);
+    const agent = await insertAgent(db, company.id, "Serial Agent");
+
+    const runningWake = await insertWakeRequest(db, {
+      companyId: company.id,
+      agentId: agent.id,
+      status: "claimed",
+    });
+    const runningRun = await insertRun(db, {
+      companyId: company.id,
+      agentId: agent.id,
+      status: "running",
+      wakeupRequestId: runningWake.id,
+      startedAt: new Date(),
+      contextSnapshot: { issueId: "11111111-1111-4111-8111-111111111111" },
+    });
+    await db
+      .update(agentWakeupRequests)
+      .set({ runId: runningRun.id })
+      .where(eq(agentWakeupRequests.id, runningWake.id));
+
+    const queuedWake = await insertWakeRequest(db, {
+      companyId: company.id,
+      agentId: agent.id,
+      status: "queued",
+      payload: { issueId: "22222222-2222-4222-8222-222222222222" },
+    });
+    const queuedRun = await insertRun(db, {
+      companyId: company.id,
+      agentId: agent.id,
+      status: "queued",
+      wakeupRequestId: queuedWake.id,
+      contextSnapshot: {
+        issueId: "22222222-2222-4222-8222-222222222222",
+        taskId: "22222222-2222-4222-8222-222222222222",
+        taskKey: "22222222-2222-4222-8222-222222222222",
+      },
+    });
+    await db
+      .update(agentWakeupRequests)
+      .set({ runId: queuedRun.id })
+      .where(eq(agentWakeupRequests.id, queuedWake.id));
+
+    await heartbeat.cancelRun(runningRun.id);
+
+    const refreshedQueuedRun = await waitFor(
+      () => heartbeat.getRun(queuedRun.id),
+      (row) => Boolean(row) && row.status === "running",
+    );
+
+    expect(refreshedQueuedRun?.status).toBe("running");
+
+    await heartbeat.cancelActiveForAgent(agent.id);
+  }, 20_000);
 });

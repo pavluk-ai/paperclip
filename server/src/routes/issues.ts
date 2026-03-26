@@ -38,6 +38,9 @@ import { isAllowedContentType, MAX_ATTACHMENT_BYTES } from "../attachment-types.
 import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.js";
 
 const MAX_ISSUE_COMMENT_LIMIT = 500;
+const PARENT_RECONCILIATION_CHILD_STATUSES = new Set(["done", "blocked", "cancelled"]);
+const PARENT_RECONCILIATION_PARENT_STATUSES = new Set(["todo", "in_progress", "in_review"]);
+const SAME_ASSIGNEE_HANDOFF_RUNNABLE_STATUSES = new Set(["todo", "in_progress"]);
 
 export function issueRoutes(db: Db, storage: StorageService) {
   const router = Router();
@@ -179,6 +182,55 @@ export function issueRoutes(db: Db, storage: StorageService) {
       }
     }
     return rawId;
+  }
+
+  function getHeartbeatRunIssueId(run: { contextSnapshot?: unknown } | null | undefined): string | null {
+    if (!run?.contextSnapshot || typeof run.contextSnapshot !== "object") return null;
+    const issueId = (run.contextSnapshot as Record<string, unknown>).issueId;
+    return typeof issueId === "string" && issueId.length > 0 ? issueId : null;
+  }
+
+  async function resolveIssueExecutionRun(issue: {
+    id: string;
+    executionRunId?: string | null;
+    assigneeAgentId?: string | null;
+  }) {
+    let run = issue.executionRunId ? await heartbeat.getRun(issue.executionRunId) : null;
+    if (run && run.status !== "queued" && run.status !== "running") {
+      run = null;
+    }
+
+    if (!run && issue.assigneeAgentId) {
+      const activeRun = await heartbeat.getActiveRunForAgent(issue.assigneeAgentId);
+      if (activeRun && getHeartbeatRunIssueId(activeRun) === issue.id) {
+        run = activeRun;
+      }
+    }
+
+    return run;
+  }
+
+  function shouldCancelStaleIssueRun(
+    updatedIssue: {
+      status: string;
+      assigneeAgentId: string | null;
+    },
+    candidateRun: {
+      id: string;
+      agentId: string;
+      status: string;
+    } | null,
+    actorRunId: string | null,
+  ) {
+    if (!candidateRun) return false;
+    if (candidateRun.status !== "queued" && candidateRun.status !== "running") return false;
+    if (actorRunId && candidateRun.id === actorRunId) return false;
+
+    const issueClosedOrDormant =
+      updatedIssue.status === "done" || updatedIssue.status === "cancelled" || updatedIssue.status === "backlog";
+    const assigneeMovedAway = updatedIssue.assigneeAgentId !== candidateRun.agentId;
+
+    return issueClosedOrDormant || assigneeMovedAway;
   }
 
   async function resolveIssueProjectAndGoal(issue: {
@@ -960,11 +1012,49 @@ export function issueRoutes(db: Db, storage: StorageService) {
 
     }
 
+    const staleExecutionRun = await resolveIssueExecutionRun(existing);
+    if (shouldCancelStaleIssueRun(issue, staleExecutionRun, actor.runId ?? null)) {
+      const cancelled = await heartbeat.cancelRun(staleExecutionRun!.id);
+      if (cancelled?.status === "cancelled") {
+        await logActivity(db, {
+          companyId: issue.companyId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          agentId: actor.agentId,
+          runId: actor.runId,
+          action: "heartbeat.cancelled",
+          entityType: "heartbeat_run",
+          entityId: cancelled.id,
+          details: {
+            agentId: cancelled.agentId,
+            source: "issue_update_stale_execution",
+            issueId: issue.id,
+            issueStatus: issue.status,
+            issueAssigneeAgentId: issue.assigneeAgentId,
+          },
+        });
+      }
+    }
+
     const assigneeChanged = assigneeWillChange;
     const statusChangedFromBacklog =
       existing.status === "backlog" &&
       issue.status !== "backlog" &&
       req.body.status !== undefined;
+    const statusChanged =
+      typeof req.body.status === "string" &&
+      existing.status !== issue.status;
+    const childEnteredParentReconciliationState =
+      statusChanged &&
+      PARENT_RECONCILIATION_CHILD_STATUSES.has(issue.status);
+    const sameAssigneeManagerHandoff =
+      statusChanged &&
+      !assigneeChanged &&
+      !statusChangedFromBacklog &&
+      Boolean(commentBody && comment) &&
+      Boolean(issue.assigneeAgentId) &&
+      SAME_ASSIGNEE_HANDOFF_RUNNABLE_STATUSES.has(issue.status) &&
+      (actor.actorType !== "agent" || actor.actorId !== issue.assigneeAgentId);
 
     // Merge all wakeups from this update into one enqueue per agent to avoid duplicate runs.
     void (async () => {
@@ -992,6 +1082,64 @@ export function issueRoutes(db: Db, storage: StorageService) {
           requestedByActorId: actor.actorId,
           contextSnapshot: { issueId: issue.id, source: "issue.status_change" },
         });
+      }
+
+      if (sameAssigneeManagerHandoff && issue.assigneeAgentId && comment && !wakeups.has(issue.assigneeAgentId)) {
+        wakeups.set(issue.assigneeAgentId, {
+          source: "automation",
+          triggerDetail: "system",
+          reason: "issue_handoff_same_assignee",
+          payload: { issueId: issue.id, commentId: comment.id, mutation: "update" },
+          requestedByActorType: actor.actorType,
+          requestedByActorId: actor.actorId,
+          contextSnapshot: {
+            issueId: issue.id,
+            taskId: issue.id,
+            commentId: comment.id,
+            wakeCommentId: comment.id,
+            source: "issue.handoff_same_assignee",
+            wakeReason: "issue_handoff_same_assignee",
+          },
+        });
+      }
+
+      if (issue.parentId && childEnteredParentReconciliationState) {
+        try {
+          const parentIssue = await svc.getById(issue.parentId);
+          if (
+            parentIssue?.assigneeAgentId &&
+            PARENT_RECONCILIATION_PARENT_STATUSES.has(parentIssue.status) &&
+            !wakeups.has(parentIssue.assigneeAgentId)
+          ) {
+            wakeups.set(parentIssue.assigneeAgentId, {
+              source: "automation",
+              triggerDetail: "system",
+              reason: "child_issue_terminal",
+              payload: {
+                issueId: parentIssue.id,
+                parentIssueId: parentIssue.id,
+                childIssueId: issue.id,
+                childIssueStatus: issue.status,
+                mutation: "update",
+              },
+              requestedByActorType: actor.actorType,
+              requestedByActorId: actor.actorId,
+              contextSnapshot: {
+                issueId: parentIssue.id,
+                parentIssueId: parentIssue.id,
+                childIssueId: issue.id,
+                childIssueStatus: issue.status,
+                source: "issue.child_terminal",
+                wakeReason: "child_issue_terminal",
+              },
+            });
+          }
+        } catch (err) {
+          logger.warn(
+            { err, childIssueId: issue.id, parentIssueId: issue.parentId },
+            "failed to queue parent reconciliation wake on child terminal update",
+          );
+        }
       }
 
       if (commentBody && comment) {
@@ -1283,26 +1431,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
         return;
       }
 
-      let runToInterrupt = currentIssue.executionRunId
-        ? await heartbeat.getRun(currentIssue.executionRunId)
-        : null;
-
-      if (
-        (!runToInterrupt || runToInterrupt.status !== "running") &&
-        currentIssue.assigneeAgentId
-      ) {
-        const activeRun = await heartbeat.getActiveRunForAgent(currentIssue.assigneeAgentId);
-        const activeIssueId =
-          activeRun &&
-            activeRun.contextSnapshot &&
-            typeof activeRun.contextSnapshot === "object" &&
-            typeof (activeRun.contextSnapshot as Record<string, unknown>).issueId === "string"
-            ? ((activeRun.contextSnapshot as Record<string, unknown>).issueId as string)
-            : null;
-        if (activeRun && activeRun.status === "running" && activeIssueId === currentIssue.id) {
-          runToInterrupt = activeRun;
-        }
-      }
+      const runToInterrupt = await resolveIssueExecutionRun(currentIssue);
 
       if (runToInterrupt && runToInterrupt.status === "running") {
         const cancelled = await heartbeat.cancelRun(runToInterrupt.id);

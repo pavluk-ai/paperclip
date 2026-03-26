@@ -339,6 +339,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     ),
   );
   const billingType = resolveClaudeBillingType(effectiveEnv);
+  if (!dangerouslySkipPermissions) {
+    await onLog(
+      "stderr",
+      `[paperclip] Warning: Claude lane "${agent.name}" (${agent.id}) is running without adapterConfig.dangerouslySkipPermissions=true. Bash/curl may require approval, which can block unattended Paperclip API work.\n`,
+    );
+  }
   const skillsDir = await buildSkillsDir(config);
 
   // When instructionsFilePath is configured, create a combined temp file that

@@ -101,6 +101,29 @@ export function agentRoutes(db: Db) {
     };
   }
 
+  function readNonEmptyString(value: unknown): string | null {
+    return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  }
+
+  function mergeInheritedWakePayload(
+    payload: Record<string, unknown> | null | undefined,
+    inheritedContext: Record<string, unknown> | null | undefined,
+  ) {
+    const merged = payload ? { ...payload } : {};
+    let changed = false;
+
+    for (const key of ["issueId", "taskId", "taskKey", "commentId", "wakeCommentId"] as const) {
+      if (readNonEmptyString(merged[key])) continue;
+      const inheritedValue = readNonEmptyString(inheritedContext?.[key]);
+      if (!inheritedValue) continue;
+      merged[key] = inheritedValue;
+      changed = true;
+    }
+
+    if (payload) return merged;
+    return changed ? merged : null;
+  }
+
   function canCreateAgents(agent: { role: string; permissions: Record<string, unknown> | null | undefined }) {
     if (!agent.permissions || typeof agent.permissions !== "object") return false;
     return Boolean((agent.permissions as Record<string, unknown>).canCreateAgents);
@@ -1939,11 +1962,22 @@ export function agentRoutes(db: Db) {
       return;
     }
 
+    let wakePayload = req.body.payload ?? null;
+    if (req.actor.type === "agent" && req.actor.agentId === id && req.actor.runId) {
+      const currentRun = await heartbeat.getRun(req.actor.runId);
+      if (currentRun?.agentId === id && currentRun.companyId === agent.companyId) {
+        wakePayload = mergeInheritedWakePayload(
+          wakePayload,
+          (currentRun.contextSnapshot as Record<string, unknown> | null | undefined) ?? null,
+        );
+      }
+    }
+
     const run = await heartbeat.wakeup(id, {
       source: req.body.source,
       triggerDetail: req.body.triggerDetail ?? "manual",
       reason: req.body.reason ?? null,
-      payload: req.body.payload ?? null,
+      payload: wakePayload,
       idempotencyKey: req.body.idempotencyKey ?? null,
       requestedByActorType: req.actor.type === "agent" ? "agent" : "user",
       requestedByActorId: req.actor.type === "agent" ? req.actor.agentId ?? null : req.actor.userId ?? null,
