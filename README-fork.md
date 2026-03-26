@@ -6,6 +6,10 @@ We keep our own improvements here, push our day-to-day changes to this fork, and
 
 As of March 14, 2026, the upstream default branch is `master`.
 
+## Fork Docs
+
+Fork-specific project docs are stored under `doc/pavluk-ai/`.
+
 ## Remote Model
 
 - `origin` = `git@github.com:pavluk-ai/paperclip.git`
