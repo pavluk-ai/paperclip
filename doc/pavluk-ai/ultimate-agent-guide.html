@@ -242,6 +242,8 @@
 <a class="toc-link toc-depth-3" href="#paperclip-safety-net">Paperclip Safety Net</a>
 <a class="toc-link toc-depth-3" href="#runtime-audit-lineage">Runtime Audit Lineage</a>
 <a class="toc-link toc-depth-3" href="#runtime-waiver-policy">Runtime Waiver Policy</a>
+<a class="toc-link toc-depth-3" href="#human-relay-vs-local-board">Human Relay vs. local-board</a>
+<a class="toc-link toc-depth-3" href="#wake-safe-agent-mentions">Wake-Safe Agent Mentions</a>
 <a class="toc-link toc-depth-2" href="#design-philosophy">Design Philosophy</a>
 <a class="toc-link toc-depth-3" href="#1-boil-the-lake-from-gstack">1. Boil the Lake (from gstack)</a>
 <a class="toc-link toc-depth-3" href="#2-ruthless-honesty-from-claude-cto-team">2. Ruthless Honesty (from claude-cto-team)</a>
@@ -342,6 +344,8 @@
 - **Handoff**: post a concise issue comment with verdict, evidence, remaining risk, and next owner, then `PATCH /api/issues/{id}` to set the next `status` and `assigneeAgentId`.
 - **Close**: post closure evidence and mark the issue `done`.
 - **Blocked-human**: post the exact missing decision, mark the issue `blocked`, and assign the human relay lane only when real human input is required.
+- The human relay lane is the default blocked-human owner. Do not use `local-board`, requester return, or `createdByUserId` as the default human escalation path. Direct board return is an exception that requires an explicit board-user request in the issue thread.
+- For wake-critical comment notifications, use explicit Paperclip agent mention links such as `[@CEO / Product Decider](agent://ca53f958-2feb-4148-8cc3-e241f3823452)` instead of shorthand plain-text aliases like `@CEO`.
 - **Self-Requeue**: if work remains, you still own the issue, and no other lane should act yet, post a progress comment and call `POST /api/agents/{your-agent-id}/wakeup` so the issue does not go idle. Self-requeue means continue the same active leaf issue with the same task scope; never rely on a prose-only wake reason and never self-requeue a parent milestone tracker while leaf work exists.
 - Manager-authored leaf handoffs may keep the assignee unchanged: if a manager posts a real handoff comment and moves an already-assigned leaf issue into `todo` or `in_progress`, Paperclip wakes that assignee automatically.
 - Managers must activate worker leaves by mutating the issue itself (`PATCH /api/issues/{id}` with status/comment/assignee changes as needed), not by calling another agent&#39;s wake endpoint directly.
@@ -366,6 +370,7 @@
 <li><strong>Security Reviewer</strong>: route milestone-gate verdicts back to CTO; route human risk acceptance to the human relay lane only when necessary.</li>
 <li><strong>Docs Researcher</strong>: route structured memos to CTO by default; route suspicious or security-sensitive research to Security Reviewer.</li>
 <li><strong>Human Relay</strong>: handles parent-only notifications, runtime-loop exceptions, and blocked human-decision issues; never becomes a normal execution lane.</li>
+<li><code>local-board</code> is the board identity, not the relay lane. Use it directly only when a board user explicitly asks for direct ownership of the issue.</li>
 </ul>
 <h3 id="parent-reconciliation-rule">Parent Reconciliation Rule</h3><p>Child completion is not enough. Milestone progress becomes real only when the parent owner reconciles the parent issue.</p>
 <ul>
@@ -416,6 +421,7 @@
 <ul>
 <li>CTO should not silently decide that runtime revalidation is optional.</li>
 <li>If runtime revalidation is believed unnecessary, the waiver request must go through the human relay lane.</li>
+<li>Runtime waivers and other human blockers should not be returned to <code>local-board</code> by default. They route to the human relay lane first, and only move to direct board ownership when a board user explicitly requests that in the issue thread.</li>
 <li>The relay must explain:<ul>
 <li>what runtime gate is being waived</li>
 <li>why</li>
@@ -423,6 +429,27 @@
 <li>why code-only or non-runtime evidence is believed sufficient</li>
 </ul>
 </li>
+</ul>
+<h3 id="human-relay-vs-local-board">Human Relay vs. local-board</h3><p>Keep these two roles distinct:</p>
+<ul>
+<li><strong>Human Relay lane</strong>: the default owner for blocked human decisions, runtime waivers, and operator-facing exception packets.</li>
+<li><strong><code>local-board</code></strong>: the native board-user identity, used directly only when a board user explicitly asks for the issue back.</li>
+</ul>
+<p>Default rule:</p>
+<ul>
+<li>human blocker or waiver request -&gt; Human Relay lane</li>
+<li>direct board ownership -&gt; only on explicit board-user request in the thread</li>
+</ul>
+<h3 id="wake-safe-agent-mentions">Wake-Safe Agent Mentions</h3><p>Plain-text aliases are not reliable wake triggers for multi-word agent names.</p>
+<ul>
+<li>Bad: <code>@CEO please reopen this</code></li>
+<li>Good: <code>[@CEO / Product Decider](agent://ca53f958-2feb-4148-8cc3-e241f3823452) please reopen this</code></li>
+</ul>
+<p>Use explicit Paperclip <code>agent://...</code> mention links whenever a comment is supposed to wake another agent.</p>
+<ul>
+<li>This is especially important for Telegram/OpenClaw relay comments authored by the Human Relay lane.</li>
+<li><code>@Pavluk-Flux</code> may appear to work as plain text only because the current name is a single exact token; do not rely on that as the general rule.</li>
+<li>This prompt-only hardening fixes agent-authored relays, not arbitrary human freeform plain-text mentions in the UI.</li>
 </ul>
 <p>Use normal milestone notifications plus runtime-loop exception notifications:</p>
 <ul>

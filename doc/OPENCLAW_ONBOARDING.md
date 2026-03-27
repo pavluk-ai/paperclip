@@ -30,6 +30,12 @@ Security/control note:
   - board users with invite permission can call it
   - agent callers are limited to the company CEO agent
 
+Execution-plane note:
+- Paperclip heartbeat runs load the Paperclip-managed agent prompt from the Paperclip instance.
+- Direct OpenClaw persona actions from Telegram/OpenClaw chat use the claimed Paperclip key plus the persona workspace prompt, typically `~/.openclaw/workspace-<persona>/AGENTS.md`.
+- If you see Paperclip activity with `runId: null`, that comment did not come from a Paperclip heartbeat run.
+- Prompt changes in Paperclip do not automatically rewrite behavior in an already-running OpenClaw chat session.
+
 5. Approve the join request in Paperclip UI, then confirm the OpenClaw agent appears in CLA agents.
 
 6. Gateway preflight (required before task tests).
@@ -46,6 +52,28 @@ AGENT_ID="<newly-created-agent-id>"
 curl -sS -H "Cookie: $PAPERCLIP_COOKIE" "http://127.0.0.1:3100/api/agents/$AGENT_ID" | jq '{adapterType,adapterConfig:{url:.adapterConfig.url,tokenLen:(.adapterConfig.headers["x-openclaw-token"] // .adapterConfig.headers["x-openclaw-auth"] // "" | length),disableDeviceAuth:(.adapterConfig.disableDeviceAuth // false),hasDeviceKey:(.adapterConfig.devicePrivateKeyPem // "" | length > 0)}}'
 ```
 - Expected: `adapterType=openclaw_gateway`, `tokenLen >= 16`, `hasDeviceKey=true`, and `disableDeviceAuth=false`.
+
+Wake-safe mention rule:
+- For wake-critical Paperclip comments authored from OpenClaw, use explicit Paperclip agent mention links.
+- Good:
+  - `[@CEO / Product Decider](agent://ca53f958-2feb-4148-8cc3-e241f3823452)`
+  - `[@CTO / Architecture Lead + Final Reviewer](agent://2b9e0e03-3c02-4cc7-b519-8017965791fe)`
+- Bad:
+  - `@CEO`
+  - `@CTO`
+- Plain `@CEO` is not wake-safe for multi-word agent names.
+- `@Pavluk-Flux` may appear to work as plain text only because it is a single-token exact match; do not rely on that as the general rule.
+
+Session refresh rule:
+- Dedicated non-main personas should keep fixed Paperclip session routing for continuity.
+- When relay/governance rules change, rotate the Paperclip-facing fixed session key and reset the Paperclip runtime session before trusting the new behavior.
+- For example, move `agent:pavluk-flux:paperclip` to `agent:pavluk-flux:paperclip:v2`.
+- If the problematic behavior is coming from a Telegram/OpenClaw chat session instead of a Paperclip heartbeat, refresh that OpenClaw chat session too rather than assuming the Paperclip prompt change is enough.
+- Safe refresh procedure for an OpenClaw chat session:
+  - back up `~/.openclaw/agents/<agent>/sessions/sessions.json`
+  - archive the chat session jsonl referenced by that entry's `sessionFile`
+  - remove only that chat session key from `sessions.json`
+  - let the next inbound message recreate the session with the updated workspace prompt
 
 Pairing handshake note:
 - Clean run expectation: first task should succeed without manual pairing commands.

@@ -55,6 +55,11 @@ describe("buildInviteOnboardingTextDocument", () => {
     expect(text).toContain("agents.list[].workspace");
     expect(text).toContain("channels.telegram.groups[*].topics");
     expect(text).toContain("If persona discovery or Telegram topic discovery is ambiguous, stop and ask the operator instead of guessing");
+    expect(text).toContain("different execution planes");
+    expect(text).toContain("runId null");
+    expect(text).toContain("[@CEO / Product Decider](agent://ca53f958-2feb-4148-8cc3-e241f3823452)");
+    expect(text).toContain("Do not rely on plain @CEO or @CTO");
+    expect(text).toContain("agent:pavluk-flux:paperclip:v2");
     expect(text).toContain("Do NOT use /v1/responses or /hooks/*");
     expect(text).toContain("set the first reachable candidate as agentDefaultsPayload.paperclipApiUrl");
     expect(text).toContain("./paperclip-claimed-api-key.json");

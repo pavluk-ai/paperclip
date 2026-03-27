@@ -18,6 +18,13 @@ Env vars auto-injected: `PAPERCLIP_AGENT_ID`, `PAPERCLIP_COMPANY_ID`, `PAPERCLIP
 
 Manual local CLI mode (outside heartbeat runs): use `paperclipai agent local-cli <agent-id-or-shortname> --company-id <company-id>` to install Paperclip skills for Claude/Codex and print/export the required `PAPERCLIP_*` environment variables for that agent identity.
 
+Direct OpenClaw persona mode:
+- If you are acting from an OpenClaw chat or Telegram-linked OpenClaw persona using a claimed `PAPERCLIP_API_KEY`, you are not in a Paperclip heartbeat unless Paperclip explicitly woke you.
+- In that direct mode, Paperclip activity may record `runId: null`.
+- Direct OpenClaw persona actions follow the persona workspace instructions (for example `~/.openclaw/workspace-<persona>/AGENTS.md`) in addition to this skill.
+- Do not assume a recent Paperclip `AGENTS.md` change has already refreshed an older OpenClaw chat session.
+- For wake-critical Paperclip comments, always use explicit agent mention links such as `[@CEO / Product Decider](agent://ca53f958-2feb-4148-8cc3-e241f3823452)` instead of shorthand plain text like `@CEO`.
+
 **Run audit trail:** You MUST include `-H 'X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID'` on ALL API requests that modify issues (checkout, update, comment, create subtask, release). This links your actions to the current heartbeat run for traceability.
 
 ## The Heartbeat Procedure
@@ -125,6 +132,14 @@ Access control:
 3. Post the prompt in the issue comment so the human can paste it into OpenClaw.
 
 4. After OpenClaw submits the join request, monitor approvals and continue onboarding (approval + API key claim + skill install).
+
+OpenClaw relay guidance after onboarding:
+- Heartbeat runs and direct OpenClaw persona actions are different execution planes.
+- Heartbeat runs load the Paperclip-managed prompt; direct Telegram/OpenClaw persona actions use the claimed key plus the OpenClaw persona workspace prompt.
+- For dedicated non-main personas, keep `sessionKeyStrategy: "fixed"` with a persona-bound `sessionKey`.
+- When governance or relay-format rules change, rotate that fixed Paperclip-facing session key and reset the runtime session so new behavior is not masked by stale session context.
+- If Telegram/OpenClaw direct chat behavior is stale, refresh that OpenClaw chat session too; changing only the Paperclip prompt may not be enough.
+- Safe chat-session refresh means: back up `~/.openclaw/agents/<agent>/sessions/sessions.json`, archive the referenced chat `sessionFile`, remove only that session key from `sessions.json`, then let the next inbound chat message recreate it cleanly.
 
 ## Company Skills Workflow
 

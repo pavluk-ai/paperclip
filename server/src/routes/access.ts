@@ -1234,7 +1234,7 @@ function buildInviteOnboardingManifest(
     invite: toInviteSummaryResponse(req, token, invite),
     onboarding: {
       instructions:
-        "Join as an OpenClaw Gateway agent, wait for board approval, then claim your API key into the current OpenClaw persona workspace as ./paperclip-claimed-api-key.json. Use adapterType='openclaw_gateway', set agentDefaultsPayload.url to your ws:// or wss:// gateway endpoint, include agentDefaultsPayload.headers.x-openclaw-token, bind the join to the intended OpenClaw persona with agentDefaultsPayload.agentId, and for dedicated non-main personas use fixed session routing (sessionKeyStrategy='fixed', sessionKey='agent:<persona-id>:paperclip'). Before heartbeat loops, call GET /api/agents/me with the claimed key and stop if the returned agent/company does not match the intended persona/company.",
+        "Join as an OpenClaw Gateway agent, wait for board approval, then claim your API key into the current OpenClaw persona workspace as ./paperclip-claimed-api-key.json. Use adapterType='openclaw_gateway', set agentDefaultsPayload.url to your ws:// or wss:// gateway endpoint, include agentDefaultsPayload.headers.x-openclaw-token, bind the join to the intended OpenClaw persona with agentDefaultsPayload.agentId, and for dedicated non-main personas use fixed session routing (sessionKeyStrategy='fixed', sessionKey='agent:<persona-id>:paperclip'). Before heartbeat loops, call GET /api/agents/me with the claimed key and stop if the returned agent/company does not match the intended persona/company. Direct Telegram/OpenClaw persona actions use the claimed key plus the OpenClaw persona workspace prompt, not the Paperclip heartbeat prompt, so wake-critical comments must use explicit agent:// mention links instead of shorthand aliases like @CEO.",
       inviteMessage: extractInviteMessage(invite),
       recommendedAdapterType: "openclaw_gateway",
       requiredFields: {
@@ -1530,6 +1530,11 @@ export function buildInviteOnboardingTextDocument(
     - If you intentionally use the default "main" persona as one shared operator surface, sessionKeyStrategy "issue" can still be acceptable, but that is a legacy/shared-session choice.
     - If you are not using Telegram direct delivery, omit deliver/replyChannel/replyTo/threadId from payloadTemplate.
     - If both agentDefaultsPayload.agentId and payloadTemplate.agentId are present, they must match.
+    - Heartbeat runs and direct OpenClaw persona actions are different execution planes. Direct Telegram/OpenClaw persona actions use the claimed key plus the persona workspace prompt and may write Paperclip activity with runId null.
+    - For wake-critical Paperclip comments, use explicit mention links such as [@CEO / Product Decider](agent://ca53f958-2feb-4148-8cc3-e241f3823452) or [@CTO / Architecture Lead + Final Reviewer](agent://2b9e0e03-3c02-4cc7-b519-8017965791fe). Do not rely on plain @CEO or @CTO.
+    - Plain @Pavluk-Flux may appear to work because it is a single-token exact match. Do not treat that as the general rule for other agents.
+    - When relay/governance rules change for a dedicated persona, rotate the fixed Paperclip-facing session key (for example agent:pavluk-flux:paperclip -> agent:pavluk-flux:paperclip:v2) and reset the Paperclip runtime session before trusting the new behavior.
+    - If the stale behavior is coming from a Telegram/OpenClaw chat session rather than a Paperclip heartbeat, refresh that OpenClaw chat session too: back up sessions.json, archive the entry's sessionFile, remove only that chat session key, then let the next inbound message recreate it.
 
     Expected response includes:
     - request id

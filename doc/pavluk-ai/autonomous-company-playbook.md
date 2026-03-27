@@ -726,6 +726,7 @@ Handoff behavior:
 - route post-runtime work back to Implementer when fixes are needed
 - route completed milestone work to CEO only when it is genuinely closure-ready
 - route runtime waiver requests or missing-runtime-gate exceptions to <HUMAN_RELAY_NAME> as explicit human-facing exceptions
+- do not return human blockers directly to `local-board` or the requester by default; direct board ownership is reserved for explicit board-user requests in the thread
 ```
 
 ### 8.3 Senior Implementer
@@ -954,6 +955,7 @@ Write:
 Handoff behavior:
 - notify the human
 - for runtime waivers or runtime-loop exceptions, include the skipped gate, reason, residual risk, and recommended action
+- keep blocked-human issues assigned to <HUMAN_RELAY_NAME> unless a board user explicitly asks for direct board ownership
 - close the notify issue when delivery succeeds
 ```
 
@@ -1240,6 +1242,7 @@ For a Marionette walkthrough and critique issue like `FLU-55`, WordWave should u
 5. QA E2E runs targeted revalidation for surgical layout/copy fixes or a full-sweep audit when flow/state behavior changed
 6. CTO/CEO close the cycle only after the post-fix runtime pass succeeds
 7. If revalidation is intentionally skipped, route an explicit waiver to `Pavluk-Flux`
+8. Do not assign the waiver directly to `local-board` unless the operator explicitly asked for direct board ownership in the issue thread
 
 ### Milestone Queue Shape
 
@@ -1305,6 +1308,31 @@ Usage:
 - Runtime-gate waiver request
 - Missing runtime-contract or toolkit on an active fix cycle
 - QA loop exhaustion or repeated runtime rework that needs operator visibility
+
+`local-board` is the board identity, not the default relay lane. Use direct board assignment only when a board user explicitly asks for the issue back.
+
+### Wake-Safe Agent Mentions
+
+When a comment is supposed to wake another agent, use an explicit Paperclip agent mention link instead of a shorthand alias.
+
+- Bad: `@CEO please reopen this`
+- Good: `[@CEO / Product Decider](agent://ca53f958-2feb-4148-8cc3-e241f3823452) please reopen this`
+
+This matters most for Telegram/OpenClaw relay comments from `Pavluk-Flux`.
+
+- agent-authored relay comments should use explicit `agent://...` mentions
+- plain-text aliases like `@CEO` or `@CTO` are not reliable for multi-word agent names
+- plain `@Pavluk-Flux` may work only because it currently matches a single-token exact name; do not rely on that as the general pattern
+
+### FLU-60 Style Waiver Example
+
+When QA blocks on a real-device clause:
+
+1. QA E2E posts the runtime blocker and keeps the issue in the runtime loop.
+2. CTO writes the waiver packet and assigns the blocked issue to `Pavluk-Flux`.
+3. `Pavluk-Flux` sends the operator relay and keeps ownership while waiting for the decision.
+4. Only if the operator explicitly says "assign it back to me" should the issue move to `local-board`.
+5. After the human decision, `Pavluk-Flux` routes the issue back to CTO or CEO so the chain resumes.
 
 ### Startup Sequence
 

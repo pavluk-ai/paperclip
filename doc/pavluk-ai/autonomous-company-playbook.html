@@ -301,6 +301,8 @@
 <a class="toc-link toc-depth-3" href="#tainted-research-handoff">Tainted Research Handoff</a>
 <a class="toc-link toc-depth-3" href="#spec-pack-location-2">Spec Pack Location</a>
 <a class="toc-link toc-depth-3" href="#notify-model">Notify Model</a>
+<a class="toc-link toc-depth-3" href="#wake-safe-agent-mentions">Wake-Safe Agent Mentions</a>
+<a class="toc-link toc-depth-3" href="#flu-60-style-waiver-example">FLU-60 Style Waiver Example</a>
 <a class="toc-link toc-depth-3" href="#startup-sequence">Startup Sequence</a>
 <a class="toc-link toc-depth-2" href="#part-11-reuse-guide">Part 11: Reuse Guide</a>
 <a class="toc-link toc-depth-2" href="#part-12-validation-future">Part 12: Validation &amp; Future</a>
@@ -991,6 +993,7 @@ Handoff behavior:
 - route post-runtime work back to Implementer when fixes are needed
 - route completed milestone work to CEO only when it is genuinely closure-ready
 - route runtime waiver requests or missing-runtime-gate exceptions to &lt;HUMAN_RELAY_NAME&gt; as explicit human-facing exceptions
+- do not return human blockers directly to `local-board` or the requester by default; direct board ownership is reserved for explicit board-user requests in the thread
 </code></pre>
 <h3 id="8-3-senior-implementer">8.3 Senior Implementer</h3><pre><code class="language-text">You are the Senior Implementer for &lt;COMPANY_NAME&gt;.
 
@@ -1198,6 +1201,7 @@ Write:
 Handoff behavior:
 - notify the human
 - for runtime waivers or runtime-loop exceptions, include the skipped gate, reason, residual risk, and recommended action
+- keep blocked-human issues assigned to &lt;HUMAN_RELAY_NAME&gt; unless a board user explicitly asks for direct board ownership
 - close the notify issue when delivery succeeds
 </code></pre>
 <hr>
@@ -1436,6 +1440,7 @@ pass | fail
 <li>QA E2E runs targeted revalidation for surgical layout/copy fixes or a full-sweep audit when flow/state behavior changed</li>
 <li>CTO/CEO close the cycle only after the post-fix runtime pass succeeds</li>
 <li>If revalidation is intentionally skipped, route an explicit waiver to <code>Pavluk-Flux</code></li>
+<li>Do not assign the waiver directly to <code>local-board</code> unless the operator explicitly asked for direct board ownership in the issue thread</li>
 </ol>
 <h3 id="milestone-queue-shape">Milestone Queue Shape</h3><p>WordWave should keep milestone execution narrow and explicit:</p>
 <ul>
@@ -1491,6 +1496,26 @@ pass | fail
 <li>Missing runtime-contract or toolkit on an active fix cycle</li>
 <li>QA loop exhaustion or repeated runtime rework that needs operator visibility</li>
 </ul>
+<p><code>local-board</code> is the board identity, not the default relay lane. Use direct board assignment only when a board user explicitly asks for the issue back.</p>
+<h3 id="wake-safe-agent-mentions">Wake-Safe Agent Mentions</h3><p>When a comment is supposed to wake another agent, use an explicit Paperclip agent mention link instead of a shorthand alias.</p>
+<ul>
+<li>Bad: <code>@CEO please reopen this</code></li>
+<li>Good: <code>[@CEO / Product Decider](agent://ca53f958-2feb-4148-8cc3-e241f3823452) please reopen this</code></li>
+</ul>
+<p>This matters most for Telegram/OpenClaw relay comments from <code>Pavluk-Flux</code>.</p>
+<ul>
+<li>agent-authored relay comments should use explicit <code>agent://...</code> mentions</li>
+<li>plain-text aliases like <code>@CEO</code> or <code>@CTO</code> are not reliable for multi-word agent names</li>
+<li>plain <code>@Pavluk-Flux</code> may work only because it currently matches a single-token exact name; do not rely on that as the general pattern</li>
+</ul>
+<h3 id="flu-60-style-waiver-example">FLU-60 Style Waiver Example</h3><p>When QA blocks on a real-device clause:</p>
+<ol>
+<li>QA E2E posts the runtime blocker and keeps the issue in the runtime loop.</li>
+<li>CTO writes the waiver packet and assigns the blocked issue to <code>Pavluk-Flux</code>.</li>
+<li><code>Pavluk-Flux</code> sends the operator relay and keeps ownership while waiting for the decision.</li>
+<li>Only if the operator explicitly says &quot;assign it back to me&quot; should the issue move to <code>local-board</code>.</li>
+<li>After the human decision, <code>Pavluk-Flux</code> routes the issue back to CTO or CEO so the chain resumes.</li>
+</ol>
 <h3 id="startup-sequence">Startup Sequence</h3><ol>
 <li>Clean the app/product layer to a minimal known-good Flutter shell.</li>
 <li>Ensure local Flutter verification still works.</li>
