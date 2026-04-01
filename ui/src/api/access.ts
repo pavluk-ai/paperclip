@@ -10,6 +10,7 @@ import { api } from "./client";
 type InviteSummary = {
   id: string;
   companyId: string | null;
+  companyName?: string | null;
   inviteType: "company_join" | "bootstrap_ceo";
   allowedJoinTypes: "human" | "agent" | "both";
   expiresAt: string;
@@ -93,6 +94,7 @@ type CompanyInviteCreated = {
   inviteUrl: string;
   expiresAt: string;
   allowedJoinTypes: "human" | "agent" | "both";
+  companyName?: string | null;
   onboardingTextPath?: string;
   onboardingTextUrl?: string;
   inviteMessage?: string | null;
