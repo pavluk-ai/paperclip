@@ -1185,6 +1185,7 @@ TOOLKIT: Playwright MCP + Marionette MCP + Repo-Local Maestro Runners
 - Validate layout and rendering
 - Performance profiling
 - Deep links and navigation
+- Prefer screen roots, section headers, and item/card keys that resolve to visible RenderBoxes; do not use sliver-only container keys as `scroll_to` targets
 
 **Repo-Local Maestro Runners** (Deterministic Mobile Device Gates):
 - Run the scripted repo-local device flows under `scripts/qa/`
@@ -1193,10 +1194,11 @@ TOOLKIT: Playwright MCP + Marionette MCP + Repo-Local Maestro Runners
 
 Use the toolkit or toolkit combination named by the runtime-contract.
 - Web/browser surface: Playwright MCP
-- Mobile feature and UX issue by default: Marionette MCP
+- Narrow mobile feature and UX issue by default: Marionette MCP
 - Scripted mobile release gate: Maestro runners
-- Hardening or release milestone on mobile: both Marionette and Maestro
-- Only use a fallback path when the runtime-contract explicitly allows it.
+- Full mobile walkthrough, critique audit, hardening, or release milestone: both Marionette and Maestro
+- For `tool_mode: both`, use Maestro first for deterministic traversal and Marionette second for live inspection and critique on the same runtime surface
+- Only use a fallback path when the runtime-contract explicitly allows it. If Marionette misses part of the required surface during `tool_mode: both`, keep the Maestro baseline evidence and report the Marionette gap as a harness finding instead of treating coverage as complete.
 
 FULL UX AUDIT SURFACE
 =====================

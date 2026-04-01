@@ -4,7 +4,8 @@ import path from "node:path";
 import type { AdapterExecutionContext } from "@paperclipai/adapter-utils";
 
 const TRUTHY_ENV_RE = /^(1|true|yes|on)$/i;
-const COPIED_SHARED_FILES = ["config.json", "config.toml", "instructions.md"] as const;
+const COPIED_SHARED_FILES = ["config.json", "instructions.md"] as const;
+const MIRRORED_SHARED_FILES = ["config.toml"] as const;
 const SYMLINKED_SHARED_FILES = ["auth.json"] as const;
 const DEFAULT_PAPERCLIP_INSTANCE_ID = "default";
 
@@ -71,6 +72,11 @@ async function ensureCopiedFile(target: string, source: string): Promise<void> {
   await fs.copyFile(source, target);
 }
 
+async function mirrorFile(target: string, source: string): Promise<void> {
+  await ensureParentDir(target);
+  await fs.copyFile(source, target);
+}
+
 export async function prepareManagedCodexHome(
   env: NodeJS.ProcessEnv,
   onLog: AdapterExecutionContext["onLog"],
@@ -93,6 +99,12 @@ export async function prepareManagedCodexHome(
     const source = path.join(sourceHome, name);
     if (!(await pathExists(source))) continue;
     await ensureCopiedFile(path.join(targetHome, name), source);
+  }
+
+  for (const name of MIRRORED_SHARED_FILES) {
+    const source = path.join(sourceHome, name);
+    if (!(await pathExists(source))) continue;
+    await mirrorFile(path.join(targetHome, name), source);
   }
 
   await onLog(

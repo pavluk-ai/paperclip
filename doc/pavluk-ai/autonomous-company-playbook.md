@@ -822,6 +822,7 @@ Toolkit:
   - capture screenshots at each validation checkpoint
   - read widget tree state to verify structure beyond visual appearance
   - check accessibility labels and semantics through the widget tree
+  - target screen roots, section headers, and item/card keys that resolve to visible RenderBoxes; do not rely on sliver-only container keys for `scroll_to`
 - for deterministic scripted mobile regressions: use repo-local Maestro runners
   - launch the repo's scripted smoke or release-gate flows under `scripts/qa/`
   - treat Maestro output as runtime evidence when the runtime-contract says `tool_mode: maestro` or `tool_mode: both`
@@ -834,6 +835,8 @@ Toolkit:
   - test responsive behavior by resizing the viewport to mobile, tablet, and desktop breakpoints
   - check dark mode by toggling the prefers-color-scheme media query
 - if the runtime-contract covers both surfaces or names `tool_mode: both`, run every required toolkit in the same validation round
+- for full mobile walkthroughs and critique audits, prefer `tool_mode: both`: Maestro first for deterministic traversal coverage, Marionette second for live Flutter inspection and critique
+- if Marionette misses a required scrolled surface during `tool_mode: both`, do not count the coverage as complete; keep the Maestro baseline evidence and report the Marionette gap as a harness finding
 
 Validation surface (check ALL of these, not just functional flows):
 - functional correctness: every flow in the runtime-contract works end-to-end
@@ -1136,6 +1139,8 @@ This milestone closes only after CTO final review, runtime validation, and secur
 
 <what to do if the preferred toolkit is unavailable; if blank, block instead of silently downgrading>
 
+For `tool_mode: both`, specify whether deterministic Maestro coverage can complete first and how Marionette traversal gaps should be reported if the live Flutter inspection misses a required surface.
+
 ## Required artifacts per round
 
 - screenshots at each checkpoint
@@ -1224,12 +1229,13 @@ pass | fail
 WordWave should be configured as:
 
 - one `QA E2E Validator` lane by default
-- Marionette MCP for mobile feature and UX runtime-contracts
+- Marionette MCP for narrow mobile feature and UX runtime-contracts
 - Maestro runners for scripted mobile regression and release-gate runtime-contracts
-- both Marionette and Maestro for hardening/release mobile runtime-contracts
+- both Marionette and Maestro for full walkthroughs, critique audits, and hardening/release mobile runtime-contracts
 - Playwright MCP for web/browser runtime-contracts
 - the runtime-contract must name `tool_mode`, entrypoint or runner, device target, required flows, artifacts, and fallback policy before QA E2E starts
-- if either harness fails, create explicit blocker/fix work instead of silently downgrading validation
+- if Marionette misses part of a required surface during `tool_mode: both`, keep the Maestro baseline evidence and report the Marionette gap as a harness finding instead of silently downgrading validation
+- if either harness fails completely, create explicit blocker/fix work instead of silently downgrading validation
 
 ### Runtime Audit Loop Example
 
