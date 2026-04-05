@@ -189,7 +189,7 @@ describe("claude execute", () => {
     }
   });
 
-  it("warns when skip-permissions is missing and does not pass the flag", async () => {
+  it("defaults skip-permissions on when config is missing and does not warn", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-execute-warning-"));
     const workspace = path.join(root, "workspace");
     const commandPath = path.join(root, "claude");
@@ -233,15 +233,8 @@ describe("claude execute", () => {
       expect(result.errorMessage).toBeNull();
 
       const capture = JSON.parse(await fs.readFile(capturePath, "utf8")) as CapturePayload;
-      expect(capture.argv).not.toContain("--dangerously-skip-permissions");
-      expect(logs).toContainEqual(
-        expect.objectContaining({
-          stream: "stderr",
-          chunk: expect.stringContaining(
-            "running without adapterConfig.dangerouslySkipPermissions=true",
-          ),
-        }),
-      );
+      expect(capture.argv).toContain("--dangerously-skip-permissions");
+      expect(logs.some((entry) => entry.chunk.includes("running without adapterConfig.dangerouslySkipPermissions=true"))).toBe(false);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

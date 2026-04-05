@@ -5,12 +5,24 @@ import { issueRoutes } from "../routes/issues.js";
 import { errorHandler } from "../middleware/index.js";
 
 const mockIssueService = vi.hoisted(() => ({
+  addComment: vi.fn(),
+  assertCheckoutOwner: vi.fn(),
+  findMentionedAgents: vi.fn(),
   getById: vi.fn(),
+  getByIdentifier: vi.fn(),
   update: vi.fn(),
 }));
 
 const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
+}));
+
+const mockHeartbeatService = vi.hoisted(() => ({
+  cancelRun: vi.fn(async () => null),
+  getActiveRunForAgent: vi.fn(async () => null),
+  getRun: vi.fn(async () => null),
+  reportRunActivity: vi.fn(async () => undefined),
+  wakeup: vi.fn(async () => undefined),
 }));
 
 const mockTrackAgentTaskCompleted = vi.hoisted(() => vi.fn());
@@ -26,17 +38,19 @@ vi.mock("../telemetry.js", () => ({
 
 vi.mock("../services/index.js", () => ({
   accessService: () => ({
-    canUser: vi.fn(),
-    hasPermission: vi.fn(),
+    canUser: vi.fn(async () => true),
+    getPermissionStatus: vi.fn(async () => ({
+      hasGrant: true,
+      membership: { status: "active" },
+    })),
+    hasPermission: vi.fn(async () => true),
   }),
   agentService: () => mockAgentService,
   documentService: () => ({}),
   executionWorkspaceService: () => ({}),
   feedbackService: () => ({}),
   goalService: () => ({}),
-  heartbeatService: () => ({
-    reportRunActivity: vi.fn(async () => undefined),
-  }),
+  heartbeatService: () => mockHeartbeatService,
   instanceSettingsService: () => ({}),
   issueApprovalService: () => ({}),
   issueService: () => mockIssueService,
@@ -77,7 +91,20 @@ describe("issue telemetry routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetTelemetryClient.mockReturnValue({ track: vi.fn() });
+    mockIssueService.addComment.mockResolvedValue({
+      authorAgentId: null,
+      authorUserId: "local-board",
+      body: "status update",
+      companyId: "company-1",
+      createdAt: new Date(),
+      id: "comment-1",
+      issueId: "11111111-1111-4111-8111-111111111111",
+      updatedAt: new Date(),
+    });
+    mockIssueService.assertCheckoutOwner.mockResolvedValue({ adoptedFromRunId: null });
+    mockIssueService.findMentionedAgents.mockResolvedValue([]);
     mockIssueService.getById.mockResolvedValue(makeIssue("todo"));
+    mockIssueService.getByIdentifier.mockResolvedValue(null);
     mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
       ...makeIssue("todo"),
       ...patch,
