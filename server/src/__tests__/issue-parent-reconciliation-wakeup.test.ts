@@ -10,6 +10,8 @@ const mockIssueService = vi.hoisted(() => ({
   update: vi.fn(),
   addComment: vi.fn(),
   findMentionedAgents: vi.fn(),
+  listWakeableBlockedDependents: vi.fn(),
+  getWakeableParentAfterChildCompletion: vi.fn(),
   assertCheckoutOwner: vi.fn(),
 }));
 
@@ -107,6 +109,8 @@ describe("issue parent reconciliation wakeup", () => {
       authorUserId: "local-board",
     });
     mockIssueService.findMentionedAgents.mockResolvedValue([]);
+    mockIssueService.listWakeableBlockedDependents.mockResolvedValue([]);
+    mockIssueService.getWakeableParentAfterChildCompletion.mockResolvedValue(null);
   });
 
   it("wakes the parent assignee when a child enters a terminal state", async () => {

@@ -12,6 +12,8 @@ const mockIssueService = vi.hoisted(() => ({
   update: vi.fn(),
   addComment: vi.fn(),
   findMentionedAgents: vi.fn(),
+  listWakeableBlockedDependents: vi.fn(),
+  getWakeableParentAfterChildCompletion: vi.fn(),
   assertCheckoutOwner: vi.fn(),
 }));
 
@@ -95,6 +97,8 @@ describe("issue same-assignee handoff wakeup", () => {
       authorUserId: "local-board",
     });
     mockIssueService.findMentionedAgents.mockResolvedValue([]);
+    mockIssueService.listWakeableBlockedDependents.mockResolvedValue([]);
+    mockIssueService.getWakeableParentAfterChildCompletion.mockResolvedValue(null);
   });
 
   it("wakes the same assignee when a manager posts a handoff comment and activates the issue", async () => {

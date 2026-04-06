@@ -58,6 +58,7 @@ describe("company skill mutation permissions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetTelemetryClient.mockReturnValue({ track: vi.fn() });
+    mockAgentService.getById.mockResolvedValue(null);
     mockCompanySkillService.importFromSource.mockResolvedValue({
       imported: [],
       warnings: [],
