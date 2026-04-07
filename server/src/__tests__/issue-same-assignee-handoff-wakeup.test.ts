@@ -78,6 +78,10 @@ function makeIssue(status: "backlog" | "todo" | "in_progress" | "done" | "cancel
   };
 }
 
+async function flushWakeups() {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 describe("issue same-assignee handoff wakeup", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -111,6 +115,7 @@ describe("issue same-assignee handoff wakeup", () => {
     const res = await request(createApp())
       .patch("/api/issues/issue-1")
       .send({ status: "in_progress", comment: "continue implementation" });
+    await flushWakeups();
 
     expect(res.status).toBe(200);
     expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
@@ -144,6 +149,7 @@ describe("issue same-assignee handoff wakeup", () => {
     const res = await request(createApp())
       .patch("/api/issues/issue-1")
       .send({ status: "in_progress" });
+    await flushWakeups();
 
     expect(res.status).toBe(200);
     expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
@@ -156,6 +162,7 @@ describe("issue same-assignee handoff wakeup", () => {
     const res = await request(createApp())
       .patch("/api/issues/issue-1")
       .send({ comment: "just a note" });
+    await flushWakeups();
 
     expect(res.status).toBe(200);
     expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
@@ -176,6 +183,7 @@ describe("issue same-assignee handoff wakeup", () => {
     }))
       .patch("/api/issues/issue-1")
       .send({ status: "in_progress", comment: "self update" });
+    await flushWakeups();
 
     expect(res.status).toBe(200);
     expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
@@ -191,6 +199,7 @@ describe("issue same-assignee handoff wakeup", () => {
     const res = await request(createApp())
       .patch("/api/issues/issue-1")
       .send({ status: "todo", comment: "activate now" });
+    await flushWakeups();
 
     expect(res.status).toBe(200);
     expect(mockHeartbeatService.wakeup).toHaveBeenCalledTimes(1);
@@ -212,6 +221,7 @@ describe("issue same-assignee handoff wakeup", () => {
     const res = await request(createApp())
       .patch("/api/issues/issue-1")
       .send({ status: "done", comment: "wrapped" });
+    await flushWakeups();
 
     expect(res.status).toBe(200);
     expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
