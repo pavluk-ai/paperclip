@@ -23,6 +23,10 @@ const mockHeartbeatService = vi.hoisted(() => ({
   cancelRun: vi.fn(async () => null),
 }));
 
+const mockAgentService = vi.hoisted(() => ({
+  resolveByReference: vi.fn(),
+}));
+
 const mockLogActivity = vi.hoisted(() => vi.fn(async () => undefined));
 const mockSyncRunStatusForIssue = vi.hoisted(() => vi.fn(async () => undefined));
 const currentActor = vi.hoisted(() => ({
@@ -42,8 +46,9 @@ vi.mock("../services/index.js", () => ({
       membership: { status: "active" },
       hasGrant: true,
     })),
+    hasPermission: vi.fn(async () => true),
   }),
-  agentService: () => ({}),
+  agentService: () => mockAgentService,
   documentService: () => ({}),
   executionWorkspaceService: () => ({}),
   feedbackService: () => ({}),
@@ -109,6 +114,10 @@ describe("issue stale execution retirement", () => {
       isInstanceAdmin: false,
     };
     mockIssueService.getByIdentifier.mockResolvedValue(null);
+    mockAgentService.resolveByReference.mockImplementation(async (_companyId: string, raw: string) => ({
+      ambiguous: false,
+      agent: { id: raw },
+    }));
     mockIssueService.assertCheckoutOwner.mockResolvedValue({ adoptedFromRunId: null });
     mockIssueService.findMentionedAgents.mockResolvedValue([]);
     mockIssueService.listWakeableBlockedDependents.mockResolvedValue([]);
