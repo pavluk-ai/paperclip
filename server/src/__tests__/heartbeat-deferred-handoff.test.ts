@@ -16,6 +16,7 @@ import {
   issues,
   type Db,
 } from "@paperclipai/db";
+import { runningProcesses } from "../adapters/index.js";
 import { heartbeatService } from "../services/heartbeat.js";
 
 type EmbeddedPostgresInstance = {
@@ -37,6 +38,7 @@ type EmbeddedPostgresCtor = new (opts: {
 
 const tempPaths: string[] = [];
 const runningInstances: EmbeddedPostgresInstance[] = [];
+const openDbs: Db[] = [];
 const DEFERRED_WAKE_CONTEXT_KEY = "_paperclipWakeContext";
 
 async function getEmbeddedPostgresCtor(): Promise<EmbeddedPostgresCtor> {
@@ -86,6 +88,12 @@ async function createTempDatabase(): Promise<string> {
   const adminUrl = `postgres://paperclip:paperclip@127.0.0.1:${port}/postgres`;
   await ensurePostgresDatabase(adminUrl, "paperclip");
   return `postgres://paperclip:paperclip@127.0.0.1:${port}/paperclip`;
+}
+
+function createTrackedDb(connectionString: string) {
+  const db = createDb(connectionString);
+  openDbs.push(db);
+  return db;
 }
 
 async function waitFor<T>(
@@ -248,6 +256,34 @@ function deferredPayloadForIssue(issueId: string) {
 }
 
 afterEach(async () => {
+  const drainDeadline = Date.now() + 2_000;
+  while (runningProcesses.size > 0 && Date.now() < drainDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  for (const [runId, processHandle] of runningProcesses.entries()) {
+    const pid = processHandle.child.pid;
+    if (typeof pid === "number") {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // Process already exited.
+      }
+    }
+    runningProcesses.delete(runId);
+  }
+
+  while (openDbs.length > 0) {
+    const db = openDbs.pop();
+    if (!db) continue;
+    const client = (db as { $client?: { end?: (options?: { timeout?: number }) => Promise<void> } }).$client;
+    if (!client?.end) continue;
+    try {
+      await client.end({ timeout: 1 });
+    } catch {
+      // Connection may already be closed during teardown.
+    }
+  }
+
   while (runningInstances.length > 0) {
     const instance = runningInstances.pop();
     if (!instance) continue;
@@ -264,7 +300,7 @@ describe("deferred issue handoff recovery", () => {
   it("promotes the run-context issue first and clears stray issue locks from the same finishing run", async () => {
     const connectionString = await createTempDatabase();
     await applyPendingMigrations(connectionString);
-    const db = createDb(connectionString);
+    const db = createTrackedDb(connectionString);
     const heartbeat = heartbeatService(db);
 
     const company = await insertCompany(db);
@@ -362,7 +398,7 @@ describe("deferred issue handoff recovery", () => {
   it("self-heals a stranded deferred wake when the issue lock points at an older terminal run", async () => {
     const connectionString = await createTempDatabase();
     await applyPendingMigrations(connectionString);
-    const db = createDb(connectionString);
+    const db = createTrackedDb(connectionString);
     const heartbeat = heartbeatService(db);
 
     const company = await insertCompany(db);
@@ -451,7 +487,7 @@ describe("deferred issue handoff recovery", () => {
   it("coalesces into an existing queued run instead of creating a duplicate promoted run", async () => {
     const connectionString = await createTempDatabase();
     await applyPendingMigrations(connectionString);
-    const db = createDb(connectionString);
+    const db = createTrackedDb(connectionString);
     const heartbeat = heartbeatService(db);
 
     const company = await insertCompany(db);
@@ -563,7 +599,7 @@ describe("deferred issue handoff recovery", () => {
   it("preserves normal assignment wake behavior when no execution lock is active", async () => {
     const connectionString = await createTempDatabase();
     await applyPendingMigrations(connectionString);
-    const db = createDb(connectionString);
+    const db = createTrackedDb(connectionString);
     const heartbeat = heartbeatService(db);
 
     const company = await insertCompany(db);
@@ -603,11 +639,18 @@ describe("deferred issue handoff recovery", () => {
   it("starts the next queued run for the agent after cancelling a stale running run", async () => {
     const connectionString = await createTempDatabase();
     await applyPendingMigrations(connectionString);
-    const db = createDb(connectionString);
+    const db = createTrackedDb(connectionString);
     const heartbeat = heartbeatService(db);
 
     const company = await insertCompany(db);
     const agent = await insertAgent(db, company.id, "Serial Agent");
+    const queuedIssue = await insertIssue(db, {
+      companyId: company.id,
+      title: "Queued follow-up issue",
+      status: "todo",
+      assigneeAgentId: agent.id,
+      identifier: `${company.issuePrefix}-51`,
+    });
 
     const runningWake = await insertWakeRequest(db, {
       companyId: company.id,
@@ -631,7 +674,7 @@ describe("deferred issue handoff recovery", () => {
       companyId: company.id,
       agentId: agent.id,
       status: "queued",
-      payload: { issueId: "22222222-2222-4222-8222-222222222222" },
+      payload: { issueId: queuedIssue.id },
     });
     const queuedRun = await insertRun(db, {
       companyId: company.id,
@@ -639,9 +682,9 @@ describe("deferred issue handoff recovery", () => {
       status: "queued",
       wakeupRequestId: queuedWake.id,
       contextSnapshot: {
-        issueId: "22222222-2222-4222-8222-222222222222",
-        taskId: "22222222-2222-4222-8222-222222222222",
-        taskKey: "22222222-2222-4222-8222-222222222222",
+        issueId: queuedIssue.id,
+        taskId: queuedIssue.id,
+        taskKey: queuedIssue.id,
       },
     });
     await db
