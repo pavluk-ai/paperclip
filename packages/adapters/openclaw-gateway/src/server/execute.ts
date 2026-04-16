@@ -515,6 +515,15 @@ function buildStandardPaperclipPayload(
   };
 }
 
+function isUnsupportedPaperclipPayloadError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const message = err.message.toLowerCase();
+  return (
+    message.includes("unexpected property 'paperclip'") ||
+    message.includes('unexpected property "paperclip"')
+  );
+}
+
 function normalizeUrl(input: string): URL | null {
   try {
     return new URL(input);
@@ -1133,6 +1142,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   };
   delete agentParams.text;
   agentParams.paperclip = paperclipPayload;
+  const compatibilityAgentParams = { ...agentParams };
+  delete compatibilityAgentParams.paperclip;
 
   const configuredAgentId = nonEmpty(ctx.config.agentId);
   if (configuredAgentId && !nonEmpty(agentParams.agentId)) {
@@ -1306,9 +1317,21 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         `[openclaw-gateway] connected protocol=${asNumber(asRecord(hello)?.protocol, PROTOCOL_VERSION)}\n`,
       );
 
-      const acceptedPayload = await client.request<Record<string, unknown>>("agent", agentParams, {
-        timeoutMs: connectTimeoutMs,
-      });
+      let acceptedPayload: Record<string, unknown>;
+      try {
+        acceptedPayload = await client.request<Record<string, unknown>>("agent", agentParams, {
+          timeoutMs: connectTimeoutMs,
+        });
+      } catch (err) {
+        if (!isUnsupportedPaperclipPayloadError(err)) throw err;
+        await ctx.onLog(
+          "stdout",
+          "[openclaw-gateway] gateway rejected structured paperclip payload; retrying without agentParams.paperclip for compatibility\n",
+        );
+        acceptedPayload = await client.request<Record<string, unknown>>("agent", compatibilityAgentParams, {
+          timeoutMs: connectTimeoutMs,
+        });
+      }
 
       latestResultPayload = acceptedPayload;
 

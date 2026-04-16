@@ -41,11 +41,13 @@ function buildContext(
 
 async function createMockGatewayServer(options?: {
   waitPayload?: Record<string, unknown>;
+  rejectPaperclip?: boolean;
 }) {
   const server = createServer();
   const wss = new WebSocketServer({ server });
 
   let agentPayload: Record<string, unknown> | null = null;
+  const agentPayloads: Record<string, unknown>[] = [];
 
   wss.on("connection", (socket) => {
     socket.send(
@@ -88,10 +90,26 @@ async function createMockGatewayServer(options?: {
 
       if (frame.method === "agent") {
         agentPayload = frame.params ?? null;
+        agentPayloads.push(agentPayload ?? {});
         const runId =
           typeof frame.params?.idempotencyKey === "string"
             ? frame.params.idempotencyKey
             : "run-123";
+
+        if (options?.rejectPaperclip && Object.hasOwn(frame.params ?? {}, "paperclip")) {
+          socket.send(
+            JSON.stringify({
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: {
+                code: "INVALID_REQUEST",
+                message: "invalid agent params: at root: unexpected property 'paperclip'",
+              },
+            }),
+          );
+          return;
+        }
 
         socket.send(
           JSON.stringify({
@@ -165,6 +183,7 @@ async function createMockGatewayServer(options?: {
   return {
     url: `ws://127.0.0.1:${address.port}`,
     getAgentPayload: () => agentPayload,
+    getAgentPayloads: () => agentPayloads,
     close: async () => {
       await new Promise<void>((resolve) => wss.close(() => resolve()));
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -601,6 +620,49 @@ describe("openclaw gateway adapter execute", () => {
       );
       expect(logs.some((entry) => entry.includes("auto-approved pairing request"))).toBe(true);
       expect(gateway.getAgentPayload()).toBeTruthy();
+    } finally {
+      await gateway.close();
+    }
+  });
+
+  it("retries without the structured paperclip payload when the gateway rejects that field", async () => {
+    const gateway = await createMockGatewayServer({ rejectPaperclip: true });
+    const logs: string[] = [];
+
+    try {
+      const result = await execute(
+        buildContext(
+          {
+            url: gateway.url,
+            headers: {
+              "x-openclaw-token": "gateway-token",
+            },
+            payloadTemplate: {
+              message: "wake now",
+            },
+            waitTimeoutMs: 2000,
+          },
+          {
+            onLog: async (_stream, chunk) => {
+              logs.push(chunk);
+            },
+          },
+        ),
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.summary).toContain("chachacha");
+
+      const payloads = gateway.getAgentPayloads();
+      expect(payloads).toHaveLength(2);
+      expect(payloads[0]?.paperclip).toBeTruthy();
+      expect(payloads[1]?.paperclip).toBeUndefined();
+      expect(String(payloads[1]?.message ?? "")).toContain("PAPERCLIP_RUN_ID=run-123");
+      expect(
+        logs.some((entry) =>
+          entry.includes("gateway rejected structured paperclip payload; retrying without agentParams.paperclip"),
+        ),
+      ).toBe(true);
     } finally {
       await gateway.close();
     }
