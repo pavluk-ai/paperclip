@@ -4,7 +4,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import type { BillingType, ExecutionWorkspace, ExecutionWorkspaceConfig } from "@paperclipai/shared";
+import type { BillingType, ExecutionWorkspace, ExecutionWorkspaceConfig, IssueExecutionPolicyMode } from "@paperclipai/shared";
 import {
   agents,
   agentRuntimeState,
@@ -14,6 +14,7 @@ import {
   heartbeatRunEvents,
   heartbeatRuns,
   issueComments,
+  issueRelations,
   issues,
   projects,
   projectWorkspaces,
@@ -53,7 +54,11 @@ import {
   sanitizeRuntimeServiceBaseEnv,
 } from "./workspace-runtime.js";
 import { issueService } from "./issues.js";
-import { executionWorkspaceService, mergeExecutionWorkspaceConfig } from "./execution-workspaces.js";
+import {
+  executionWorkspaceService,
+  inspectGitCloseReadiness,
+  mergeExecutionWorkspaceConfig,
+} from "./execution-workspaces.js";
 import { workspaceOperationService } from "./workspace-operations.js";
 import { isProcessGroupAlive, terminateLocalService } from "./local-service-supervisor.js";
 import {
@@ -76,6 +81,7 @@ import {
   writePaperclipSkillSyncPreference,
 } from "@paperclipai/adapter-utils/server-utils";
 import { extractSkillMentionIds } from "@paperclipai/shared";
+import { reconcileSourceBackedSessionContext, repoAgentInstructionsService } from "./repo-agent-instructions.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -94,6 +100,7 @@ const MAX_INLINE_WAKE_COMMENT_BODY_CHARS = 4_000;
 const MAX_INLINE_WAKE_COMMENT_BODY_TOTAL_CHARS = 12_000;
 const execFile = promisify(execFileCallback);
 const ACTIVE_HEARTBEAT_RUN_STATUSES = ["queued", "running"] as const;
+const TERMINAL_ISSUE_STATUSES = new Set(["done", "cancelled"]);
 const SESSIONED_LOCAL_ADAPTERS = new Set([
   "claude_local",
   "codex_local",
@@ -459,6 +466,7 @@ const heartbeatRunSafeResultJsonColumn = sql<Record<string, unknown> | null>`
           ${heartbeatRuns.resultJson} -> 'cost_usd',
           ${heartbeatRuns.resultJson} -> 'costUsd'
         ),
+        'timeoutRecovery', ${heartbeatRuns.resultJson} -> 'timeoutRecovery',
         'truncated', true,
         'truncationReason', 'oversized_result_json',
         'originalSizeBytes', pg_column_size(${heartbeatRuns.resultJson})
@@ -599,6 +607,14 @@ function readNonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
+function readIssueExecutionPolicyMode(value: unknown): IssueExecutionPolicyMode | null {
+  const mode = readNonEmptyString(parseObject(value).mode);
+  if (mode === "normal" || mode === "auto" || mode === "checkpoint") {
+    return mode;
+  }
+  return null;
+}
+
 export function summarizeHeartbeatRunContextSnapshot(
   contextSnapshot: Record<string, unknown> | null | undefined,
 ): Record<string, unknown> | null {
@@ -678,6 +694,121 @@ function summarizeRunFailureForIssueComment(
   if (errorCode) return ` Latest retry failure: \`${errorCode}\`.`;
   if (summary) return ` Latest retry failure: ${summary}.`;
   return null;
+}
+
+type TimeoutRecoveryClassification = "clean_timeout" | "dirty_timeout_recovery_required";
+
+type TimeoutRecoverySummary = {
+  classification: TimeoutRecoveryClassification;
+  executionWorkspaceId: string | null;
+  branchName: string | null;
+  workspacePath: string | null;
+  baseRef: string | null;
+  dirtyTrackedFiles: number;
+  untrackedFiles: number;
+  aheadCount: number | null;
+  behindCount: number | null;
+  routedToAgentId: string | null;
+  routedToAgentName: string | null;
+  routedStatus: string | null;
+  wakeReason: string | null;
+  lastFailureSummary: string | null;
+};
+
+function readTimeoutRecoverySummary(value: unknown): TimeoutRecoverySummary | null {
+  const parsed = parseObject(parseObject(value)?.timeoutRecovery);
+  const classification = parsed.classification === "dirty_timeout_recovery_required"
+    ? "dirty_timeout_recovery_required"
+    : parsed.classification === "clean_timeout"
+      ? "clean_timeout"
+      : null;
+  if (!classification) return null;
+  const readCount = (input: unknown) => {
+    if (typeof input === "number" && Number.isFinite(input)) return Math.max(0, Math.trunc(input));
+    const normalized = readNonEmptyString(input);
+    if (!normalized) return null;
+    const parsedNumber = Number.parseInt(normalized, 10);
+    if (!Number.isFinite(parsedNumber)) return null;
+    return Math.max(0, parsedNumber);
+  };
+  return {
+    classification,
+    executionWorkspaceId: readNonEmptyString(parsed.executionWorkspaceId),
+    branchName: readNonEmptyString(parsed.branchName),
+    workspacePath: readNonEmptyString(parsed.workspacePath),
+    baseRef: readNonEmptyString(parsed.baseRef),
+    dirtyTrackedFiles: readCount(parsed.dirtyTrackedFiles) ?? 0,
+    untrackedFiles: readCount(parsed.untrackedFiles) ?? 0,
+    aheadCount: readCount(parsed.aheadCount),
+    behindCount: readCount(parsed.behindCount),
+    routedToAgentId: readNonEmptyString(parsed.routedToAgentId),
+    routedToAgentName: readNonEmptyString(parsed.routedToAgentName),
+    routedStatus: readNonEmptyString(parsed.routedStatus),
+    wakeReason: readNonEmptyString(parsed.wakeReason),
+    lastFailureSummary: readNonEmptyString(parsed.lastFailureSummary),
+  };
+}
+
+function summarizeTimeoutRecoveryFailure(input: {
+  errorCode: string | null | undefined;
+  errorMessage: string | null | undefined;
+  stderrExcerpt: string | null | undefined;
+  stdoutExcerpt: string | null | undefined;
+}) {
+  const summarizeText = (value: string | null | undefined) =>
+    value
+      ?.split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean) ?? null;
+
+  const errorCode = readNonEmptyString(input.errorCode);
+  const summarySource =
+    summarizeText(input.errorMessage) ??
+    summarizeText(input.stderrExcerpt) ??
+    summarizeText(input.stdoutExcerpt);
+  const summary =
+    summarySource && summarySource.length > 240
+      ? `${summarySource.slice(0, 237)}...`
+      : summarySource;
+
+  if (errorCode && summary) return `\`${errorCode}\` - ${summary}`;
+  if (errorCode) return `\`${errorCode}\``;
+  return summary;
+}
+
+function buildTimeoutRecoveryIssueComment(input: {
+  runId: string;
+  routedToAgentName: string | null;
+  branchName: string | null;
+  workspacePath: string | null;
+  baseRef: string | null;
+  dirtyTrackedFiles: number;
+  untrackedFiles: number;
+  aheadCount: number | null;
+  behindCount: number | null;
+  lastFailureSummary: string | null;
+}) {
+  return [
+    "Paperclip timed out while this issue still had preserved workspace changes, so recovery was routed for review instead of auto-retrying the implementer.",
+    "",
+    `- Timed-out run: \`${input.runId}\``,
+    input.routedToAgentName ? `- Recovery owner: ${input.routedToAgentName}` : "",
+    input.branchName ? `- Branch: \`${input.branchName}\`` : "",
+    input.workspacePath ? `- Workspace: \`${input.workspacePath}\`` : "",
+    input.baseRef ? `- Base ref: \`${input.baseRef}\`` : "",
+    `- Dirty tracked files: ${input.dirtyTrackedFiles}`,
+    `- Untracked files: ${input.untrackedFiles}`,
+    input.aheadCount !== null ? `- Ahead of base: ${input.aheadCount}` : "",
+    input.behindCount !== null ? `- Behind base: ${input.behindCount}` : "",
+    input.lastFailureSummary ? `- Last visible failure: ${input.lastFailureSummary}` : "",
+    "",
+    "Required recovery action:",
+    "- `promote`: commit/push coherent partial work and hand off to the next lane",
+    "- `park and split`: keep the workspace, narrow or split the work, then reactivate the right issue",
+    "- `discard`: explicitly abandon the partial work and archive or clean the workspace",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function normalizeLedgerBillingType(value: unknown): BillingType {
@@ -992,6 +1123,7 @@ export function shouldResetTaskSessionForWake(
   const wakeReason = readNonEmptyString(contextSnapshot?.wakeReason);
   if (
     wakeReason === "issue_assigned" ||
+    wakeReason === "issue_timeout_recovery" ||
     wakeReason === "execution_review_requested" ||
     wakeReason === "execution_approval_requested" ||
     wakeReason === "execution_changes_requested"
@@ -1007,6 +1139,7 @@ function shouldRequireIssueCommentForWake(
   const wakeReason = readNonEmptyString(contextSnapshot?.wakeReason);
   return (
     wakeReason === "issue_assigned" ||
+    wakeReason === "issue_timeout_recovery" ||
     wakeReason === "execution_review_requested" ||
     wakeReason === "execution_approval_requested" ||
     wakeReason === "execution_changes_requested"
@@ -1027,6 +1160,7 @@ function describeSessionResetReason(
 
   const wakeReason = readNonEmptyString(contextSnapshot?.wakeReason);
   if (wakeReason === "issue_assigned") return "wake reason is issue_assigned";
+  if (wakeReason === "issue_timeout_recovery") return "wake reason is issue_timeout_recovery";
   if (wakeReason === "execution_review_requested") return "wake reason is execution_review_requested";
   if (wakeReason === "execution_approval_requested") return "wake reason is execution_approval_requested";
   if (wakeReason === "execution_changes_requested") return "wake reason is execution_changes_requested";
@@ -1045,16 +1179,18 @@ function shouldAutoCheckoutIssueForWake(input: {
   if (
     issueStatus !== "todo" &&
     issueStatus !== "backlog" &&
-    issueStatus !== "blocked" &&
     issueStatus !== "in_progress"
   ) {
-    return false;
+    if (issueStatus !== "blocked") return false;
   }
 
   const wakeReason = readNonEmptyString(input.contextSnapshot?.wakeReason);
   if (!wakeReason) return false;
   if (wakeReason === "issue_comment_mentioned") return false;
   if (wakeReason.startsWith("execution_")) return false;
+  if (issueStatus === "blocked") {
+    return wakeReason === "issue_blockers_resolved";
+  }
 
   return true;
 }
@@ -1495,6 +1631,7 @@ export function heartbeatService(db: Db) {
   const runLogStore = getRunLogStore();
   const secretsSvc = secretService(db);
   const companySkills = companySkillService(db);
+  const repoInstructions = repoAgentInstructionsService(db);
   const issuesSvc = issueService(db);
   const executionWorkspacesSvc = executionWorkspaceService(db);
   const workspaceOperationsSvc = workspaceOperationService(db);
@@ -1534,6 +1671,7 @@ export function heartbeatService(db: Db) {
         id: issues.id,
         identifier: issues.identifier,
         title: issues.title,
+        parentId: issues.parentId,
         status: issues.status,
         priority: issues.priority,
         projectId: issues.projectId,
@@ -1541,12 +1679,128 @@ export function heartbeatService(db: Db) {
         executionWorkspaceId: issues.executionWorkspaceId,
         executionWorkspacePreference: issues.executionWorkspacePreference,
         assigneeAgentId: issues.assigneeAgentId,
+        assigneeUserId: issues.assigneeUserId,
         assigneeAdapterOverrides: issues.assigneeAdapterOverrides,
         executionWorkspaceSettings: issues.executionWorkspaceSettings,
       })
       .from(issues)
       .where(and(eq(issues.id, issueId), eq(issues.companyId, companyId)))
       .then((rows) => rows[0] ?? null);
+  }
+
+  async function listUnresolvedBlockerIssueIds(companyId: string, issueId: string) {
+    const blockingRows = await db
+      .select({ blockerId: issueRelations.issueId })
+      .from(issueRelations)
+      .where(
+        and(
+          eq(issueRelations.companyId, companyId),
+          eq(issueRelations.type, "blocks"),
+          eq(issueRelations.relatedIssueId, issueId),
+        ),
+      );
+    const blockerIds = blockingRows
+      .map((row) => row.blockerId)
+      .filter((value, index, array): value is string => Boolean(value) && array.indexOf(value) === index);
+    if (blockerIds.length === 0) return [];
+
+    return db
+      .select({ id: issues.id })
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, companyId),
+          inArray(issues.id, blockerIds),
+          sql`${issues.status} not in ('done', 'cancelled')`,
+        ),
+      )
+      .then((rows) => rows.map((row) => row.id));
+  }
+
+  async function listOpenChildIssueIds(companyId: string, parentId: string) {
+    return db
+      .select({ id: issues.id })
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, companyId),
+          eq(issues.parentId, parentId),
+          sql`${issues.status} not in ('done', 'cancelled')`,
+        ),
+      )
+      .then((rows) => rows.map((row) => row.id));
+  }
+
+  async function describeIssueExecutionEligibilityFailure(input: {
+    companyId: string;
+    issueId: string;
+    issueContext: Awaited<ReturnType<typeof getIssueExecutionContext>> | null;
+    agentId: string;
+    contextSnapshot: Record<string, unknown> | null | undefined;
+  }) {
+    const { issueContext } = input;
+    if (!issueContext) return "Cancelled because the assigned issue no longer exists";
+    if (issueContext.assigneeAgentId !== input.agentId) {
+      return "Cancelled because the issue is no longer assigned to this agent";
+    }
+
+    const wakeReason = readNonEmptyString(input.contextSnapshot?.wakeReason);
+    if (TERMINAL_ISSUE_STATUSES.has(issueContext.status)) {
+      return `Cancelled because the issue is already ${issueContext.status}`;
+    }
+    if (issueContext.status === "blocked" && wakeReason !== "issue_blockers_resolved") {
+      return "Cancelled because the issue is blocked";
+    }
+
+    const [unresolvedBlockerIds, openChildIssueIds] = await Promise.all([
+      listUnresolvedBlockerIssueIds(input.companyId, input.issueId),
+      listOpenChildIssueIds(input.companyId, input.issueId),
+    ]);
+
+    if (unresolvedBlockerIds.length > 0) {
+      return unresolvedBlockerIds.length === 1
+        ? "Cancelled because the issue still has an unresolved blocker"
+        : `Cancelled because the issue still has ${unresolvedBlockerIds.length} unresolved blockers`;
+    }
+    if (openChildIssueIds.length > 0) {
+      return openChildIssueIds.length === 1
+        ? "Cancelled because the issue still has an open child issue and is not the active executable leaf"
+        : `Cancelled because the issue still has ${openChildIssueIds.length} open child issues and is not the active executable leaf`;
+    }
+
+    return null;
+  }
+
+  async function resolveTimeoutRecoveryOwner(input: {
+    companyId: string;
+    issueContext: NonNullable<Awaited<ReturnType<typeof getIssueExecutionContext>>>;
+    agent: typeof agents.$inferSelect;
+  }) {
+    let nextParentId = input.issueContext.parentId;
+    while (nextParentId) {
+      const parent = await db
+        .select({
+          id: issues.id,
+          parentId: issues.parentId,
+          assigneeAgentId: issues.assigneeAgentId,
+        })
+        .from(issues)
+        .where(and(eq(issues.companyId, input.companyId), eq(issues.id, nextParentId)))
+        .then((rows) => rows[0] ?? null);
+      if (!parent) break;
+      if (parent.assigneeAgentId && parent.assigneeAgentId !== input.agent.id) {
+        const parentAssignee = await getAgent(parent.assigneeAgentId);
+        if (parentAssignee && parentAssignee.companyId === input.companyId) return parentAssignee;
+      }
+      nextParentId = parent.parentId;
+    }
+
+    if (input.agent.reportsTo && input.agent.reportsTo !== input.agent.id) {
+      const manager = await getAgent(input.agent.reportsTo);
+      if (manager && manager.companyId === input.companyId) return manager;
+    }
+
+    return input.agent;
   }
 
   async function getRuntimeState(agentId: string) {
@@ -2430,6 +2684,7 @@ export function heartbeatService(db: Db) {
     }
 
     const postedComment = await findRunIssueComment(run.id, run.companyId, issueId);
+    const timeoutRecovery = readTimeoutRecoverySummary(run.resultJson);
     if (postedComment) {
       await patchRunIssueCommentStatus(run.id, {
         issueCommentStatus: "satisfied",
@@ -2437,6 +2692,14 @@ export function heartbeatService(db: Db) {
         issueCommentRetryQueuedAt: null,
       });
       return { outcome: "satisfied" as const, queuedRun: null };
+    }
+    if (timeoutRecovery?.classification === "dirty_timeout_recovery_required") {
+      await patchRunIssueCommentStatus(run.id, {
+        issueCommentStatus: "not_applicable",
+        issueCommentSatisfiedByCommentId: null,
+        issueCommentRetryQueuedAt: null,
+      });
+      return { outcome: "not_applicable" as const, queuedRun: null };
     }
 
     if (readNonEmptyString(contextSnapshot.retryReason) === "missing_issue_comment") {
@@ -2617,7 +2880,7 @@ export function heartbeatService(db: Db) {
       return null;
     }
 
-    const context = parseObject(run.contextSnapshot);
+    let context = parseObject(run.contextSnapshot);
     const budgetBlock = await budgets.getInvocationBlock(run.companyId, run.agentId, {
       issueId: readNonEmptyString(context.issueId),
       projectId: readNonEmptyString(context.projectId),
@@ -3038,6 +3301,7 @@ export function heartbeatService(db: Db) {
       const latestRun = await getLatestIssueRun(issue.companyId, issue.id);
       const latestContext = parseObject(latestRun?.contextSnapshot);
       const latestRetryReason = readNonEmptyString(latestContext.retryReason);
+      const executionPolicyMode = readIssueExecutionPolicyMode(issue.executionPolicy);
 
       if (issue.status === "todo") {
         if (!latestRun || latestRun.status === "succeeded") {
@@ -3079,6 +3343,11 @@ export function heartbeatService(db: Db) {
         } else {
           result.skipped += 1;
         }
+        continue;
+      }
+
+      if (executionPolicyMode === "checkpoint" && (!latestRun || latestRun.status === "succeeded")) {
+        result.skipped += 1;
         continue;
       }
 
@@ -3246,7 +3515,7 @@ export function heartbeatService(db: Db) {
     }
 
     const runtime = await ensureRuntimeState(agent);
-    const context = parseObject(run.contextSnapshot);
+    let context = parseObject(run.contextSnapshot);
     const taskKey = deriveTaskKeyWithHeartbeatFallback(context, null);
     const sessionCodec = getAdapterSessionCodec(agent.adapterType);
     const issueId = readNonEmptyString(context.issueId);
@@ -3270,12 +3539,43 @@ export function heartbeatService(db: Db) {
       }
       issueContext = await getIssueExecutionContext(agent.companyId, issueId);
     }
+    if (issueId) {
+      const executionEligibilityFailure = await describeIssueExecutionEligibilityFailure({
+        companyId: agent.companyId,
+        issueId,
+        issueContext,
+        agentId: agent.id,
+        contextSnapshot: context,
+      });
+      if (executionEligibilityFailure) {
+        await cancelRunInternal(run.id, executionEligibilityFailure);
+        return;
+      }
+    }
     const issueAssigneeOverrides =
       issueContext && issueContext.assigneeAgentId === agent.id
         ? parseIssueAssigneeAdapterOverrides(
             issueContext.assigneeAdapterOverrides,
           )
         : null;
+    const config = parseObject(agent.adapterConfig);
+    const repoBackedInstructions = await repoInstructions.prepareRuntimePacket(agent, issueId);
+    let sourceBackedSessionResetReason: string | null = null;
+    if (repoBackedInstructions) {
+      const reconciled = reconcileSourceBackedSessionContext(context, repoBackedInstructions.hash);
+      context = reconciled.contextSnapshot;
+      if (reconciled.changed) {
+        sourceBackedSessionResetReason = reconciled.previousHash
+          ? `repo-backed instructions changed (${reconciled.previousHash.slice(0, 8)} -> ${repoBackedInstructions.hash.slice(0, 8)})`
+          : `repo-backed instructions were refreshed (${repoBackedInstructions.hash.slice(0, 8)})`;
+      }
+      context.instructionsSourceKind = repoBackedInstructions.kind;
+      context.instructionsSourceVersion = repoBackedInstructions.version;
+      context.instructionsSourceHash = repoBackedInstructions.hash;
+      context.instructionsSourceFilePath = repoBackedInstructions.instructionsFilePath;
+      context.instructionsSourceIssueDocumentKeys = repoBackedInstructions.issueDocumentKeys;
+      context.instructionsSourceRepoDocs = repoBackedInstructions.linkedRepoPaths;
+    }
     const isolatedWorkspacesEnabled = (await instanceSettings.getExperimental()).enableIsolatedWorkspaces;
     const issueExecutionWorkspaceSettings = isolatedWorkspacesEnabled
       ? parseIssueExecutionWorkspaceSettings(issueContext?.executionWorkspaceSettings)
@@ -3300,7 +3600,7 @@ export function heartbeatService(db: Db) {
       ? await getTaskSession(agent.companyId, agent.id, agent.adapterType, taskKey)
       : null;
     const resetTaskSession = shouldResetTaskSessionForWake(context);
-    const sessionResetReason = describeSessionResetReason(context);
+    const sessionResetReason = sourceBackedSessionResetReason ?? describeSessionResetReason(context);
     const taskSessionForRun = resetTaskSession ? null : taskSession;
     const explicitResumeSessionParams = normalizeSessionParams(
       sessionCodec.deserialize(parseObject(context.resumeSessionParams)),
@@ -3314,7 +3614,6 @@ export function heartbeatService(db: Db) {
       explicitResumeSessionParams ??
       (explicitResumeSessionDisplayId ? { sessionId: explicitResumeSessionDisplayId } : null) ??
       normalizeSessionParams(sessionCodec.deserialize(taskSessionForRun?.sessionParamsJson ?? null));
-    const config = parseObject(agent.adapterConfig);
     const requestedExecutionWorkspaceMode = resolveExecutionWorkspaceMode({
       projectPolicy: projectExecutionWorkspacePolicy,
       issueSettings: issueExecutionWorkspaceSettings,
@@ -3392,6 +3691,9 @@ export function heartbeatService(db: Db) {
       : persistedWorkspaceManagedConfig;
     const configSnapshot = buildExecutionWorkspaceConfigSnapshot(mergedConfig);
     const executionRunConfig = stripWorkspaceRuntimeFromExecutionRunConfig(mergedConfig);
+    if (repoBackedInstructions) {
+      executionRunConfig.instructionsFilePath = repoBackedInstructions.instructionsFilePath;
+    }
     const { resolvedConfig, secretKeys } = await resolveExecutionRunAdapterConfig({
       companyId: agent.companyId,
       executionRunConfig,
@@ -3594,6 +3896,11 @@ export function heartbeatService(db: Db) {
     });
     const runtimeSessionParams = runtimeSessionResolution.sessionParams;
     const runtimeWorkspaceWarnings = [
+      ...(repoBackedInstructions
+        ? [
+            `Using repo-backed runtime instructions ${repoBackedInstructions.hash.slice(0, 8)} from ${repoBackedInstructions.instructionsFilePath}.`,
+          ]
+        : []),
       ...resolvedWorkspace.warnings,
       ...executionWorkspace.warnings,
       ...(runtimeSessionResolution.warning ? [runtimeSessionResolution.warning] : []),
@@ -3726,6 +4033,24 @@ export function heartbeatService(db: Db) {
         level: "info",
         message: "run started",
       });
+      if (repoBackedInstructions) {
+        await appendRunEvent(currentRun, seq++, {
+          eventType: "instructions.source",
+          stream: "system",
+          level: "info",
+          message: "repo-backed runtime instructions prepared",
+          payload: {
+            kind: repoBackedInstructions.kind,
+            version: repoBackedInstructions.version,
+            hash: repoBackedInstructions.hash,
+            filePath: repoBackedInstructions.instructionsFilePath,
+            issueDocumentKeys: repoBackedInstructions.issueDocumentKeys,
+            linkedRepoPaths: repoBackedInstructions.linkedRepoPaths,
+            lanePromptPath: repoBackedInstructions.lanePromptPath,
+            laneName: repoBackedInstructions.laneName,
+          },
+        });
+      }
 
       handle = await runLogStore.begin({
         companyId: run.companyId,
@@ -4002,10 +4327,55 @@ export function heartbeatService(db: Db) {
             } as Record<string, unknown>)
           : null;
 
-      const persistedResultJson = mergeHeartbeatRunResultJson(
+      let timeoutRecoverySummary: TimeoutRecoverySummary | null = null;
+      if (issueId && outcome === "timed_out" && issueContext) {
+        const inspection = persistedExecutionWorkspace
+          ? await inspectGitCloseReadiness(persistedExecutionWorkspace)
+          : { git: null, warnings: [] as string[] };
+        const dirtyTrackedFiles = inspection.git?.dirtyEntryCount ?? 0;
+        const untrackedFiles = inspection.git?.untrackedEntryCount ?? 0;
+        const aheadCount = inspection.git?.aheadCount ?? null;
+        const isDirtyTimeoutRecovery = dirtyTrackedFiles > 0 || untrackedFiles > 0 || (aheadCount ?? 0) > 0;
+        const recoveryOwner = isDirtyTimeoutRecovery
+          ? await resolveTimeoutRecoveryOwner({
+              companyId: agent.companyId,
+              issueContext,
+              agent,
+            })
+          : null;
+        timeoutRecoverySummary = {
+          classification: isDirtyTimeoutRecovery ? "dirty_timeout_recovery_required" : "clean_timeout",
+          executionWorkspaceId: persistedExecutionWorkspace?.id ?? issueContext.executionWorkspaceId ?? null,
+          branchName: inspection.git?.branchName ?? executionWorkspace.branchName ?? null,
+          workspacePath: inspection.git?.workspacePath ?? executionWorkspace.cwd ?? null,
+          baseRef: inspection.git?.baseRef ?? executionWorkspace.repoRef ?? null,
+          dirtyTrackedFiles,
+          untrackedFiles,
+          aheadCount,
+          behindCount: inspection.git?.behindCount ?? null,
+          routedToAgentId: recoveryOwner?.id ?? null,
+          routedToAgentName: recoveryOwner?.title ?? recoveryOwner?.name ?? null,
+          routedStatus: isDirtyTimeoutRecovery ? "in_review" : null,
+          wakeReason: readNonEmptyString(context.wakeReason),
+          lastFailureSummary: summarizeTimeoutRecoveryFailure({
+            errorCode: "timeout",
+            errorMessage: adapterResult.errorMessage,
+            stderrExcerpt,
+            stdoutExcerpt,
+          }),
+        };
+      }
+
+      let persistedResultJson = mergeHeartbeatRunResultJson(
         adapterResult.resultJson ?? null,
         adapterResult.summary ?? null,
       );
+      if (timeoutRecoverySummary) {
+        persistedResultJson = {
+          ...(persistedResultJson ?? {}),
+          timeoutRecovery: timeoutRecoverySummary,
+        };
+      }
 
       await setRunStatus(run.id, status, {
         finishedAt: new Date(),
@@ -4067,6 +4437,76 @@ export function heartbeatService(db: Db) {
               "stderr",
               `[paperclip] Failed to post run summary comment: ${err instanceof Error ? err.message : String(err)}\n`,
             );
+          }
+        } else if (issueId && timeoutRecoverySummary?.classification === "dirty_timeout_recovery_required") {
+          try {
+            const existingRunComment = await findRunIssueComment(finalizedRun.id, finalizedRun.companyId, issueId);
+            if (!existingRunComment) {
+              await issuesSvc.addComment(
+                issueId,
+                buildTimeoutRecoveryIssueComment({
+                  runId: finalizedRun.id,
+                  routedToAgentName: timeoutRecoverySummary.routedToAgentName,
+                  branchName: timeoutRecoverySummary.branchName,
+                  workspacePath: timeoutRecoverySummary.workspacePath,
+                  baseRef: timeoutRecoverySummary.baseRef,
+                  dirtyTrackedFiles: timeoutRecoverySummary.dirtyTrackedFiles,
+                  untrackedFiles: timeoutRecoverySummary.untrackedFiles,
+                  aheadCount: timeoutRecoverySummary.aheadCount,
+                  behindCount: timeoutRecoverySummary.behindCount,
+                  lastFailureSummary: timeoutRecoverySummary.lastFailureSummary,
+                }),
+                { runId: finalizedRun.id },
+              );
+            }
+          } catch (err) {
+            await onLog(
+              "stderr",
+              `[paperclip] Failed to post timeout recovery comment: ${err instanceof Error ? err.message : String(err)}\n`,
+            );
+          }
+          try {
+            await issuesSvc.update(issueId, {
+              status: "in_review",
+              assigneeAgentId: timeoutRecoverySummary.routedToAgentId ?? issueContext?.assigneeAgentId ?? null,
+              assigneeUserId: null,
+            });
+          } catch (err) {
+            await onLog(
+              "stderr",
+              `[paperclip] Failed to route dirty timeout recovery to review: ${err instanceof Error ? err.message : String(err)}\n`,
+            );
+          }
+          await appendRunEvent(finalizedRun, seq++, {
+            eventType: "lifecycle",
+            stream: "system",
+            level: "warn",
+            message: "timed out with preserved workspace changes; routed to recovery review",
+            payload: {
+              timeoutRecovery: timeoutRecoverySummary,
+            },
+          });
+          if (
+            timeoutRecoverySummary.routedToAgentId &&
+            timeoutRecoverySummary.routedToAgentId !== agent.id
+          ) {
+            try {
+              await enqueueWakeup(timeoutRecoverySummary.routedToAgentId, {
+                source: "automation",
+                triggerDetail: "system",
+                reason: "issue_timeout_recovery",
+                requestedByActorType: "system",
+                payload: {
+                  issueId,
+                  timedOutRunId: finalizedRun.id,
+                },
+              });
+            } catch (err) {
+              await onLog(
+                "stderr",
+                `[paperclip] Failed to enqueue timeout recovery wake: ${err instanceof Error ? err.message : String(err)}\n`,
+              );
+            }
           }
         }
         await finalizeIssueCommentPolicy(finalizedRun, agent);

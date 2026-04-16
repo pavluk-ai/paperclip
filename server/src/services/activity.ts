@@ -74,7 +74,8 @@ export function activityService(db: Db) {
           ${heartbeatRuns.resultJson} -> 'total_cost_usd',
           ${heartbeatRuns.resultJson} -> 'cost_usd',
           ${heartbeatRuns.resultJson} -> 'costUsd'
-        )
+        ),
+        'timeoutRecovery', ${heartbeatRuns.resultJson} -> 'timeoutRecovery'
       ))
     end
   `.as("resultJson");

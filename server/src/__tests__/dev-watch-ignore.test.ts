@@ -11,10 +11,15 @@ describe("resolveServerDevWatchIgnorePaths", () => {
     const worktreeRoot = path.join(tempRoot, "repo", ".paperclip", "worktrees", "PAP-884");
     const serverRoot = path.join(worktreeRoot, "server");
     const worktreeUiRoot = path.join(worktreeRoot, "ui");
+    const repoRoot = path.join(worktreeRoot);
+    const packageSdkDist = path.join(repoRoot, "packages", "plugins", "sdk", "dist");
+    const sharedDist = path.join(repoRoot, "packages", "shared", "dist");
 
     fs.mkdirSync(path.join(sharedUiRoot, "node_modules"), { recursive: true });
     fs.mkdirSync(path.join(sharedUiRoot, ".vite"), { recursive: true });
     fs.mkdirSync(path.join(sharedUiRoot, "dist"), { recursive: true });
+    fs.mkdirSync(packageSdkDist, { recursive: true });
+    fs.mkdirSync(sharedDist, { recursive: true });
     fs.mkdirSync(serverRoot, { recursive: true });
     fs.mkdirSync(worktreeUiRoot, { recursive: true });
 
@@ -36,7 +41,13 @@ describe("resolveServerDevWatchIgnorePaths", () => {
     expect(ignorePaths).toContain(fs.realpathSync(path.join(sharedUiRoot, ".vite")));
     expect(ignorePaths).toContain(path.join(worktreeUiRoot, "dist"));
     expect(ignorePaths).toContain(fs.realpathSync(path.join(sharedUiRoot, "dist")));
+    expect(ignorePaths).toContain(packageSdkDist);
+    expect(ignorePaths).toContain(`${packageSdkDist.replaceAll(path.sep, "/")}/**`);
+    expect(ignorePaths).toContain(sharedDist);
+    expect(ignorePaths).toContain(`${sharedDist.replaceAll(path.sep, "/")}/**`);
     expect(ignorePaths).toContain("**/{node_modules,bower_components,vendor}/**");
     expect(ignorePaths).toContain("**/.vite-temp/**");
+    expect(ignorePaths).toContain("**/cli/dist/**");
+    expect(ignorePaths).toContain("**/packages/**/dist/**");
   });
 });

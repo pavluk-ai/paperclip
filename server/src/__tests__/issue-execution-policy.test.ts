@@ -43,6 +43,14 @@ describe("normalizeIssueExecutionPolicy", () => {
     expect(normalizeIssueExecutionPolicy({ stages: [] })).toBeNull();
   });
 
+  it("preserves checkpoint mode when stages are empty", () => {
+    expect(normalizeIssueExecutionPolicy({ mode: "checkpoint", stages: [] })).toEqual({
+      mode: "checkpoint",
+      commentRequired: true,
+      stages: [],
+    });
+  });
+
   it("throws when all participants are invalid (missing agentId)", () => {
     expect(() =>
       normalizeIssueExecutionPolicy({

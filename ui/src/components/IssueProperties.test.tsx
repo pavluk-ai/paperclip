@@ -459,4 +459,24 @@ describe("IssueProperties", () => {
 
     act(() => root.unmount());
   });
+
+  it("shows checkpoint execution mode when the issue uses checkpoint policy", async () => {
+    const root = renderProperties(container, {
+      issue: createIssue({
+        executionPolicy: createExecutionPolicy({
+          mode: "checkpoint",
+          stages: [],
+        }),
+      }),
+      childIssues: [],
+      onUpdate: vi.fn(),
+      inline: true,
+    });
+    await flush();
+
+    expect(container.textContent).toContain("Execution mode");
+    expect(container.textContent).toContain("Checkpoint");
+
+    act(() => root.unmount());
+  });
 });

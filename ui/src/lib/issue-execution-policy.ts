@@ -85,7 +85,16 @@ export function buildExecutionPolicy(input: {
     });
   }
 
-  if (stages.length === 0) return null;
+  if (stages.length === 0) {
+    if (mode === "checkpoint") {
+      return {
+        mode,
+        commentRequired: true,
+        stages: [],
+      };
+    }
+    return null;
+  }
 
   return {
     mode,

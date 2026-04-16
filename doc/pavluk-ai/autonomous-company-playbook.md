@@ -1254,7 +1254,7 @@ For a Marionette walkthrough and critique issue like `FLU-55`, WordWave should u
 
 WordWave should keep milestone execution narrow and explicit:
 
-- current milestone parent: `in_progress`
+- current milestone parent: `in_progress` with `executionPolicy.mode = checkpoint`
 - current active worker leaf: `todo` or `in_progress`
 - later sibling leaves in the same milestone: `backlog`
 - future milestone parents: `backlog`

@@ -4187,15 +4187,15 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
             });
             continue;
           }
-          try {
-            const materialized = await instructions.materializeManagedBundle(updated, bundleFiles, {
-              clearLegacyPromptTemplate: true,
-              replaceExisting: true,
-            });
-            updated = await agents.update(updated.id, { adapterConfig: materialized.adapterConfig }) ?? updated;
-          } catch (err) {
-            warnings.push(`Failed to materialize instructions bundle for ${manifestAgent.slug}: ${err instanceof Error ? err.message : String(err)}`);
-          }
+          const materialized = await instructions.materializeManagedBundle(updated, bundleFiles, {
+            clearLegacyPromptTemplate: true,
+            replaceExisting: true,
+          }).catch((err) => {
+            throw unprocessable(
+              `Failed to materialize instructions bundle for ${manifestAgent.slug}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+          updated = await agents.update(updated.id, { adapterConfig: materialized.adapterConfig }) ?? updated;
           agentStatusById.set(updated.id, updated.status ?? agentStatusById.get(updated.id) ?? null);
           importedSlugToAgentId.set(planAgent.slug, updated.id);
           existingSlugToAgentId.set(normalizeAgentUrlKey(updated.name) ?? updated.id, updated.id);
@@ -4229,15 +4229,15 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
           true,
           actorUserId ?? null,
         );
-        try {
-          const materialized = await instructions.materializeManagedBundle(created, bundleFiles, {
-            clearLegacyPromptTemplate: true,
-            replaceExisting: true,
-          });
-          created = await agents.update(created.id, { adapterConfig: materialized.adapterConfig }) ?? created;
-        } catch (err) {
-          warnings.push(`Failed to materialize instructions bundle for ${manifestAgent.slug}: ${err instanceof Error ? err.message : String(err)}`);
-        }
+        const materialized = await instructions.materializeManagedBundle(created, bundleFiles, {
+          clearLegacyPromptTemplate: true,
+          replaceExisting: true,
+        }).catch((err) => {
+          throw unprocessable(
+            `Failed to materialize instructions bundle for ${manifestAgent.slug}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+        created = await agents.update(created.id, { adapterConfig: materialized.adapterConfig }) ?? created;
         agentStatusById.set(created.id, created.status ?? createdStatus);
         importedSlugToAgentId.set(planAgent.slug, created.id);
         existingSlugToAgentId.set(normalizeAgentUrlKey(created.name) ?? created.id, created.id);

@@ -49,6 +49,7 @@ export function normalizeIssueExecutionPolicy(input: unknown): IssueExecutionPol
   if (!parsed.success) {
     throw unprocessable("Invalid execution policy", parsed.error.flatten());
   }
+  const mode = parsed.data.mode ?? "normal";
 
   const stages = parsed.data.stages
     .map((stage) => {
@@ -80,10 +81,19 @@ export function normalizeIssueExecutionPolicy(input: unknown): IssueExecutionPol
     })
     .filter((stage): stage is NonNullable<typeof stage> => stage !== null);
 
-  if (stages.length === 0) return null;
+  if (stages.length === 0) {
+    if (mode === "checkpoint") {
+      return {
+        mode,
+        commentRequired: true,
+        stages: [],
+      };
+    }
+    return null;
+  }
 
   return {
-    mode: parsed.data.mode ?? "normal",
+    mode,
     commentRequired: true,
     stages,
   };

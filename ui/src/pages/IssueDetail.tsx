@@ -19,6 +19,7 @@ import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { assigneeValueFromSelection, suggestedCommentAssigneeValue } from "../lib/assignees";
 import { extractIssueTimelineEvents } from "../lib/issue-timeline-events";
 import { queryKeys } from "../lib/queryKeys";
+import { findLatestDirtyTimeoutRecoveryRun } from "../lib/run-timeout-recovery";
 import { keepPreviousDataForSameQueryTail } from "../lib/query-placeholder-data";
 import {
   hasLegacyIssueDetailQuery,
@@ -582,6 +583,10 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
   });
   const resolvedActivity = activity ?? [];
   const resolvedLinkedRuns = linkedRuns ?? [];
+  const latestTimeoutRecoveryRun = useMemo(
+    () => findLatestDirtyTimeoutRecoveryRun(resolvedLinkedRuns),
+    [resolvedLinkedRuns],
+  );
 
   const runningIssueRun = useMemo(
     () => resolveRunningIssueRun(activeRun, resolvedLiveRuns),
@@ -663,6 +668,22 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
           </Button>
         </div>
       ) : null}
+      {latestTimeoutRecoveryRun && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-950/20 dark:text-amber-100">
+          <div className="font-medium text-amber-900 dark:text-amber-100">Timeout recovery active</div>
+          <div className="mt-1">
+            Run <span className="font-mono">{latestTimeoutRecoveryRun.runId.slice(0, 8)}</span> timed out with preserved workspace changes, so Paperclip routed recovery review instead of blindly retrying the worker.
+          </div>
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-amber-800 dark:text-amber-200">
+            <span>Recovery owner: {latestTimeoutRecoveryRun.recovery.routedToAgentName ?? "Unchanged"}</span>
+            <span>Status: {latestTimeoutRecoveryRun.recovery.routedStatus ?? "Preserved"}</span>
+            <span>Dirty tracked files: {latestTimeoutRecoveryRun.recovery.dirtyTrackedFiles}</span>
+            <span>Untracked files: {latestTimeoutRecoveryRun.recovery.untrackedFiles}</span>
+            {latestTimeoutRecoveryRun.recovery.branchName && <span>Branch: {latestTimeoutRecoveryRun.recovery.branchName}</span>}
+            {latestTimeoutRecoveryRun.recovery.workspacePath && <span className="break-all">Workspace: {latestTimeoutRecoveryRun.recovery.workspacePath}</span>}
+          </div>
+        </div>
+      )}
       <IssueChatThread
         composerRef={composerRef}
         comments={commentsWithRunMeta}

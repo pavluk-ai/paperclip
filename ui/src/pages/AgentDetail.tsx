@@ -101,6 +101,7 @@ import {
   arraysEqual,
   isReadOnlyUnmanagedSkillEntry,
 } from "../lib/agent-skills-state";
+import { isDirtyRunTimeoutRecovery, readRunTimeoutRecovery } from "../lib/run-timeout-recovery";
 
 const runStatusIcons: Record<string, { icon: typeof CheckCircle2; color: string }> = {
   succeeded: { icon: CheckCircle2, color: "text-green-600 dark:text-green-400" },
@@ -3149,7 +3150,12 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
     },
   });
 
-  const canRetryRun = run.status === "failed" || run.status === "timed_out";
+  const timeoutRecovery = useMemo(
+    () => readRunTimeoutRecovery(run.resultJson),
+    [run.resultJson],
+  );
+  const hasDirtyTimeoutRecovery = isDirtyRunTimeoutRecovery(timeoutRecovery);
+  const canRetryRun = (run.status === "failed" || run.status === "timed_out") && !hasDirtyTimeoutRecovery;
   const retryPayload = useMemo(() => {
     const payload: Record<string, unknown> = {};
     const context = asRecord(run.contextSnapshot);
@@ -3282,6 +3288,11 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
                   <RotateCcw className="h-3.5 w-3.5 mr-1" />
                   {retryRun.isPending ? "Retrying…" : "Retry"}
                 </Button>
+              )}
+              {hasDirtyTimeoutRecovery && (
+                <span className="text-[11px] text-amber-700 dark:text-amber-300">
+                  Recovery routed to review
+                </span>
               )}
             </div>
             {/* Adapter type · provider · model */}
@@ -3475,6 +3486,35 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
           </div>
         )}
       </div>
+
+      {hasDirtyTimeoutRecovery && timeoutRecovery && (
+        <div className="rounded-lg border border-amber-300 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-950/20 p-3 space-y-2">
+          <div className="text-xs font-medium text-amber-800 dark:text-amber-200">Timeout recovery</div>
+          <div className="text-xs text-amber-700 dark:text-amber-100">
+            Paperclip preserved workspace changes for this timed-out run and routed recovery review instead of blindly retrying the worker.
+          </div>
+          <div className="grid gap-1 text-xs text-amber-800 dark:text-amber-100 sm:grid-cols-2">
+            <div>Recovery owner: {timeoutRecovery.routedToAgentName ?? "Unchanged"}</div>
+            <div>Status: {timeoutRecovery.routedStatus ?? "Preserved"}</div>
+            <div>Dirty tracked files: {timeoutRecovery.dirtyTrackedFiles}</div>
+            <div>Untracked files: {timeoutRecovery.untrackedFiles}</div>
+            {timeoutRecovery.aheadCount !== null && <div>Ahead of base: {timeoutRecovery.aheadCount}</div>}
+            {timeoutRecovery.behindCount !== null && <div>Behind base: {timeoutRecovery.behindCount}</div>}
+            {timeoutRecovery.branchName && <div>Branch: {timeoutRecovery.branchName}</div>}
+            {timeoutRecovery.baseRef && <div>Base ref: {timeoutRecovery.baseRef}</div>}
+            {timeoutRecovery.workspacePath && (
+              <div className="sm:col-span-2 break-all">
+                Workspace: {timeoutRecovery.workspacePath}
+              </div>
+            )}
+            {timeoutRecovery.lastFailureSummary && (
+              <div className="sm:col-span-2">
+                Last visible failure: {timeoutRecovery.lastFailureSummary}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Issues touched by this run */}
       {touchedIssues && touchedIssues.length > 0 && (

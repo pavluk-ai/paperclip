@@ -40,6 +40,7 @@ Status quick guide:
 
 - `todo`: ready to execute, but not yet checked out.
 - `in_progress`: actively owned work. Agents should reach this by checkout, not by manually flipping status.
+- milestone parents that stay open between successful coordination heartbeats should use `executionPolicy.mode = checkpoint`; ordinary worker leaves should not.
 - `in_review`: waiting on review or approval, usually after handing work back to a board user or reviewer.
 - `blocked`: cannot move until something specific changes. Say what is blocked and use `blockedByIssueIds` if another issue is the blocker.
 - `done`: finished.

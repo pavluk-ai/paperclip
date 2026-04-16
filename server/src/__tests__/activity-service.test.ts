@@ -79,6 +79,12 @@ describeEmbeddedPostgres("activity service", () => {
         billing_type: "metered",
         total_cost_usd: 0.42,
         summary: "done",
+        timeoutRecovery: {
+          classification: "dirty_timeout_recovery_required",
+          dirtyTrackedFiles: 2,
+          untrackedFiles: 1,
+          routedToAgentId: "agent-cto",
+        },
         nestedHuge: { payload: "y".repeat(256_000) },
       },
     });
@@ -111,6 +117,12 @@ describeEmbeddedPostgres("activity service", () => {
       costUsd: 0.42,
       cost_usd: 0.42,
       total_cost_usd: 0.42,
+      timeoutRecovery: {
+        classification: "dirty_timeout_recovery_required",
+        dirtyTrackedFiles: 2,
+        untrackedFiles: 1,
+        routedToAgentId: "agent-cto",
+      },
     });
   });
 });

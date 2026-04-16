@@ -172,6 +172,12 @@ describeEmbeddedPostgres("heartbeat list", () => {
       resultJson: {
         summary: "completed",
         stdout: oversizedStdout,
+        timeoutRecovery: {
+          classification: "dirty_timeout_recovery_required",
+          dirtyTrackedFiles: 3,
+          untrackedFiles: 1,
+          routedToAgentId: "agent-cto",
+        },
         nestedHuge: { payload: oversizedNestedPayload },
       },
     });
@@ -181,6 +187,12 @@ describeEmbeddedPostgres("heartbeat list", () => {
 
     expect(result).toMatchObject({
       summary: "completed",
+      timeoutRecovery: {
+        classification: "dirty_timeout_recovery_required",
+        dirtyTrackedFiles: 3,
+        untrackedFiles: 1,
+        routedToAgentId: "agent-cto",
+      },
       truncated: true,
       truncationReason: "oversized_result_json",
       stdoutTruncated: true,

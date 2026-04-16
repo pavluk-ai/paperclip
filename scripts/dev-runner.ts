@@ -586,7 +586,10 @@ async function stopChildForRestart() {
 async function startServerChild() {
   await buildPluginSdk();
 
-  const serverScript = mode === "watch" ? "dev:watch" : "dev";
+  // The outer dev runner already owns restart decisions in watch mode.
+  // Launch the server once here so generated package dist files from local
+  // verification builds do not trigger a second nested tsx watcher.
+  const serverScript = "dev";
   child = spawn(
     pnpmBin,
     ["--filter", "@paperclipai/server", serverScript, ...forwardedArgs],

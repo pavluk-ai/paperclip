@@ -318,6 +318,34 @@ describe("agent instructions service", () => {
     expect(result.bundle.files.map((file) => file.path)).toEqual(["AGENTS.md"]);
   });
 
+  it("does not delete the existing managed bundle when replacement input is invalid", async () => {
+    const paperclipHome = await makeTempDir("paperclip-agent-instructions-invalid-replace-");
+    cleanupDirs.add(paperclipHome);
+    process.env.PAPERCLIP_HOME = paperclipHome;
+    process.env.PAPERCLIP_INSTANCE_ID = "test-instance";
+
+    const managedRoot = path.join(
+      paperclipHome,
+      "instances",
+      "test-instance",
+      "companies",
+      "company-1",
+      "agents",
+      "agent-1",
+      "instructions",
+    );
+    await fs.mkdir(managedRoot, { recursive: true });
+    await fs.writeFile(path.join(managedRoot, "AGENTS.md"), "# Existing Agent\n", "utf8");
+
+    const svc = agentInstructionsService();
+    const agent = makeAgent({});
+
+    await expect(
+      svc.materializeManagedBundle(agent, { "../invalid.md": "bad" }, { replaceExisting: true }),
+    ).rejects.toThrow("Instructions file path must stay within the bundle root");
+    await expect(fs.readFile(path.join(managedRoot, "AGENTS.md"), "utf8")).resolves.toBe("# Existing Agent\n");
+  });
+
   it("recovers the managed bundle when stale root metadata is present but mode is missing", async () => {
     const paperclipHome = await makeTempDir("paperclip-agent-instructions-partial-managed-");
     const staleRoot = await makeTempDir("paperclip-agent-instructions-partial-root-");

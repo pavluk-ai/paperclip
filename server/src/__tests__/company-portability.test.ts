@@ -2371,6 +2371,44 @@ describe("company portability", () => {
     );
   });
 
+  it("fails import visibly when managed instructions bundle materialization fails", async () => {
+    const portability = companyPortabilityService({} as any);
+
+    const exported = await portability.exportBundle("company-1", {
+      include: {
+        company: true,
+        agents: true,
+        projects: false,
+        issues: false,
+      },
+    });
+
+    agentSvc.list.mockResolvedValue([]);
+    agentInstructionsSvc.materializeManagedBundle.mockRejectedValueOnce(new Error("missing prompt source path"));
+
+    await expect(
+      portability.importBundle({
+        source: {
+          type: "inline",
+          rootPath: exported.rootPath,
+          files: exported.files,
+        },
+        include: {
+          company: true,
+          agents: true,
+          projects: false,
+          issues: false,
+        },
+        target: {
+          mode: "new_company",
+          newCompanyName: "Imported Paperclip",
+        },
+        agents: "all",
+        collisionStrategy: "rename",
+      }, "user-1"),
+    ).rejects.toThrow("Failed to materialize instructions bundle for claudecoder: missing prompt source path");
+  });
+
   it("strips root AGENTS frontmatter when importing a nested agent entry path", async () => {
     const portability = companyPortabilityService({} as any);
 

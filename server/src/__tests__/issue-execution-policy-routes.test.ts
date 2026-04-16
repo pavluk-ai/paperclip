@@ -146,4 +146,41 @@ describe("issue execution policy routes", () => {
     expect(updatePatch.executionState).toBeUndefined();
     expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
   });
+
+  it("accepts checkpoint execution policy updates with no review or approval stages", async () => {
+    const issue = {
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      companyId: "company-1",
+      status: "in_progress",
+      assigneeAgentId: "33333333-3333-4333-8333-333333333333",
+      assigneeUserId: null,
+      createdByUserId: "local-board",
+      identifier: "PAP-1000",
+      title: "Milestone checkpoint",
+      executionPolicy: null,
+      executionState: null,
+    };
+    mockIssueService.getById.mockResolvedValue(issue);
+    mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+      ...issue,
+      ...patch,
+      updatedAt: new Date(),
+    }));
+
+    const res = await request(await createApp())
+      .patch("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+      .send({ executionPolicy: { mode: "checkpoint", stages: [] } });
+
+    expect(res.status).toBe(200);
+    expect(mockIssueService.update).toHaveBeenCalledWith(
+      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      expect.objectContaining({
+        executionPolicy: {
+          mode: "checkpoint",
+          commentRequired: true,
+          stages: [],
+        },
+      }),
+    );
+  });
 });

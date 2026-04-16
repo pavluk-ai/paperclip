@@ -334,6 +334,7 @@ export function IssueProperties({
     }
     return `${stageLabel} pending${participantLabel ? ` with ${participantLabel}` : ""}`;
   })();
+  const executionModeLabel = issue.executionPolicy?.mode === "checkpoint" ? "Checkpoint" : null;
 
   const labelsTrigger = (issue.labels ?? []).length > 0 ? (
     <div className="flex items-center gap-1 flex-wrap">
@@ -1049,6 +1050,11 @@ export function IssueProperties({
         {currentExecutionLabel && (
           <PropertyRow label="Execution">
             <span className="text-sm">{currentExecutionLabel}</span>
+          </PropertyRow>
+        )}
+        {executionModeLabel && (
+          <PropertyRow label="Execution mode">
+            <span className="text-sm">{executionModeLabel}</span>
           </PropertyRow>
         )}
 

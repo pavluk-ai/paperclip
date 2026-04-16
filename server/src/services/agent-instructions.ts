@@ -130,7 +130,7 @@ function resolvePathWithinRoot(rootPath: string, relativePath: string): string {
   return absolutePath;
 }
 
-function resolveManagedInstructionsRoot(agent: AgentLike): string {
+export function resolveManagedInstructionsRoot(agent: AgentLike): string {
   return path.resolve(
     resolvePaperclipInstanceRoot(),
     "companies",
@@ -429,6 +429,61 @@ async function writeBundleFiles(
   }
 }
 
+async function writeNormalizedBundleEntries(
+  rootPath: string,
+  entries: ReadonlyArray<readonly [string, string]>,
+  entryFile: string,
+) {
+  for (const [relativePath, content] of entries) {
+    const absolutePath = resolvePathWithinRoot(rootPath, relativePath);
+    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+    await fs.writeFile(absolutePath, content, "utf8");
+  }
+  if (!entries.some(([relativePath]) => relativePath === entryFile)) {
+    await fs.writeFile(resolvePathWithinRoot(rootPath, entryFile), "", "utf8");
+  }
+}
+
+async function replaceDirectoryContentsAtomically(
+  rootPath: string,
+  entries: ReadonlyArray<readonly [string, string]>,
+  entryFile: string,
+) {
+  const parentDir = path.dirname(rootPath);
+  const rootBaseName = path.basename(rootPath);
+  await fs.mkdir(parentDir, { recursive: true });
+
+  const stagingRoot = await fs.mkdtemp(path.join(parentDir, `${rootBaseName}.tmp-`));
+  let backupRoot: string | null = null;
+
+  try {
+    await writeNormalizedBundleEntries(stagingRoot, entries, entryFile);
+
+    const existingRoot = await statIfExists(rootPath);
+    if (existingRoot) {
+      backupRoot = path.join(parentDir, `${rootBaseName}.backup-${Date.now()}`);
+      await fs.rm(backupRoot, { recursive: true, force: true });
+      await fs.rename(rootPath, backupRoot);
+    }
+
+    await fs.rename(stagingRoot, rootPath);
+
+    if (backupRoot) {
+      await fs.rm(backupRoot, { recursive: true, force: true });
+    }
+  } catch (err) {
+    await fs.rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
+    if (backupRoot) {
+      const rootExists = await statIfExists(rootPath);
+      if (!rootExists) {
+        await fs.rename(backupRoot, rootPath).catch(() => undefined);
+      }
+      await fs.rm(backupRoot, { recursive: true, force: true }).catch(() => undefined);
+    }
+    throw err;
+  }
+}
+
 export function syncInstructionsBundleConfigFromFilePath(
   agent: AgentLike,
   adapterConfig: Record<string, unknown>,
@@ -693,23 +748,16 @@ export function agentInstructionsService() {
   ): Promise<{ bundle: AgentInstructionsBundle; adapterConfig: Record<string, unknown> }> {
     const rootPath = resolveManagedInstructionsRoot(agent);
     const entryFile = options?.entryFile ? normalizeRelativeFilePath(options.entryFile) : ENTRY_FILE_DEFAULT;
-
-    if (options?.replaceExisting) {
-      await fs.rm(rootPath, { recursive: true, force: true });
-    }
-    await fs.mkdir(rootPath, { recursive: true });
-
     const normalizedEntries = Object.entries(files).map(([relativePath, content]) => [
       normalizeRelativeFilePath(relativePath),
       content,
     ] as const);
-    for (const [relativePath, content] of normalizedEntries) {
-      const absolutePath = resolvePathWithinRoot(rootPath, relativePath);
-      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-      await fs.writeFile(absolutePath, content, "utf8");
-    }
-    if (!normalizedEntries.some(([relativePath]) => relativePath === entryFile)) {
-      await fs.writeFile(resolvePathWithinRoot(rootPath, entryFile), "", "utf8");
+
+    if (options?.replaceExisting) {
+      await replaceDirectoryContentsAtomically(rootPath, normalizedEntries, entryFile);
+    } else {
+      await fs.mkdir(rootPath, { recursive: true });
+      await writeNormalizedBundleEntries(rootPath, normalizedEntries, entryFile);
     }
 
     const adapterConfig = applyBundleConfig(asRecord(agent.adapterConfig), {

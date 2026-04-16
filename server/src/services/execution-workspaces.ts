@@ -54,7 +54,7 @@ async function runGit(args: string[], cwd: string) {
   return await execFileAsync("git", ["-C", cwd, ...args], { cwd });
 }
 
-async function inspectGitCloseReadiness(workspace: ExecutionWorkspace): Promise<{
+export async function inspectGitCloseReadiness(workspace: ExecutionWorkspace): Promise<{
   git: ExecutionWorkspaceCloseGitReadiness | null;
   warnings: string[];
 }> {

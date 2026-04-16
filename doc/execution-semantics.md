@@ -57,6 +57,11 @@ The issue is actively owned work.
 - for agent-owned issues, this is a strict execution-backed state
 - for user-owned issues, this is a human ownership state and is not backed by heartbeat execution
 
+There is one narrow exception for agent-owned orchestration issues:
+
+- `executionPolicy.mode = checkpoint` means the issue may stay agent-assigned and `in_progress` between successful checkpoint heartbeats
+- this is intended for milestone/coordination issues, not normal worker leaves
+
 For agent-owned issues, `in_progress` should not be allowed to become a silent dead state.
 
 ### `blocked`
@@ -93,6 +98,7 @@ Agent-owned issues are part of the control plane's execution loop.
 - Paperclip can wake the assignee
 - Paperclip can track runs linked to the issue
 - Paperclip can recover some lost execution state after crashes/restarts
+- checkpoint-mode issues stay visible in the agent lane without requiring a continuously live run after a successful checkpoint
 
 ### User-owned issues
 
@@ -154,6 +160,15 @@ For agent-assigned, non-terminal, actionable issues, Paperclip should not leave 
 
 The relevant execution path depends on status.
 
+Before adapter execution starts, Paperclip re-checks that the queued wake is still valid.
+
+- if the issue is now `done` or `cancelled`, the queued run is cancelled
+- if the issue is no longer assigned to the waking agent, the queued run is cancelled
+- if blockers are still unresolved, the queued run is cancelled
+- if the issue still has open child issues and is not the active executable leaf, the queued run is cancelled
+- generic assignment wakes do not auto-checkout blocked issues
+- the only blocked-state exception is an explicit blocker-resolution wake after blockers are actually terminal
+
 ### Agent-assigned `todo`
 
 This is dispatch state: ready to start, not yet actively claimed.
@@ -173,6 +188,11 @@ A healthy active-work state means at least one of these is true:
 - there is an active run for the issue
 - there is already a queued continuation wake
 - the issue has been explicitly surfaced as stranded
+
+Checkpoint-mode issues are different:
+
+- if `executionPolicy.mode = checkpoint`, a successful prior run is enough to leave the issue open between heartbeats
+- automatic stranded-work recovery still applies when the latest checkpoint run failed, timed out, was cancelled, or was otherwise lost
 
 ## 8. Crash and Restart Recovery
 
@@ -211,6 +231,36 @@ Recovery rule:
 - if that continuation wake also finishes and the issue is still stranded, Paperclip moves the issue to `blocked` and posts a visible comment
 
 This is an active-work continuity recovery.
+
+Checkpoint-mode exception:
+
+- if the issue is `in_progress` with `executionPolicy.mode = checkpoint` and the latest issue-linked run succeeded, Paperclip does not treat the issue as stranded just because no live run remains
+
+### 8.3 Timed-out dirty work
+
+Timeouts are split into two classes for issue-linked execution workspaces.
+
+Clean timeout:
+
+- the run timed out
+- the linked execution workspace has no dirty tracked files
+- the linked execution workspace has no untracked files
+- the linked execution workspace is not ahead of base
+
+Dirty timeout recovery:
+
+- the run timed out
+- the linked execution workspace still has tracked changes, untracked files, or commits ahead of base
+
+Dirty timeout recovery is fail-closed:
+
+- Paperclip does not auto-requeue the same worker
+- Paperclip releases the execution lock
+- Paperclip moves the issue to `in_review`
+- Paperclip routes ownership to the supervising agent when one exists
+- Paperclip posts a structured recovery comment with workspace state and required next actions
+
+This is intentionally different from ordinary stranded-work recovery. The system preserves partial work and surfaces it for explicit recovery instead of pretending a blind retry is safe.
 
 ## 9. Startup and Periodic Reconciliation
 
