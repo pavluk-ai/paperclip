@@ -431,6 +431,25 @@ describe("issue comment reopen routes", () => {
     expect(mockIssueService.update).not.toHaveBeenCalled();
   });
 
+  it("does not auto-wake checkpoint issues via POST comments unless they are explicitly reopened or mentioned", async () => {
+    mockIssueService.getById.mockResolvedValue({
+      ...makeIssue("todo"),
+      status: "in_progress",
+      executionPolicy: {
+        mode: "checkpoint",
+        commentRequired: true,
+        stages: [],
+      },
+    });
+
+    const res = await request(await installActor(createApp()))
+      .post("/api/issues/11111111-1111-4111-8111-111111111111/comments")
+      .send({ body: "status check" });
+
+    expect(res.status).toBe(201);
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+  });
+
   it("wakes the assignee when an assigned blocked issue moves back to todo", async () => {
     const issue = makeIssue("blocked");
     mockIssueService.getById.mockResolvedValue(issue);

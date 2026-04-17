@@ -272,11 +272,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   if (resolvedInstructionsFilePath) {
     try {
       const instructionsContents = await fs.readFile(resolvedInstructionsFilePath, "utf8");
-      systemPromptExtension =
-        `${instructionsContents}\n\n` +
+      systemPromptExtension = joinPromptSections([
+        instructionsContents,
         `The above agent instructions were loaded from ${resolvedInstructionsFilePath}. ` +
-        `Resolve any relative file references from ${instructionsFileDir}.\n\n` +
-        `You are agent {{agent.id}} ({{agent.name}}). Continue your Paperclip work.`;
+          `Resolve any relative file references from ${instructionsFileDir}.`,
+        "You are agent {{agent.id}} ({{agent.name}}). Continue your Paperclip work.",
+      ]);
     } catch (err) {
       instructionsReadFailed = true;
       const reason = err instanceof Error ? err.message : String(err);

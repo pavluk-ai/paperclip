@@ -349,7 +349,7 @@ export function RunInvocationCard({
                     .map((note, idx) => (
                       <li key={`${idx}-${note}`} className="text-xs break-all font-mono">
                         {note}
-                      </li>
+                  </li>
                     ))}
                 </ul>
               </div>

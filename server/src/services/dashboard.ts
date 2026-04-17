@@ -1,6 +1,6 @@
 import { and, eq, gte, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agents, approvals, companies, costEvents, issues } from "@paperclipai/db";
+import { agentRuntimeState, agents, approvals, companies, costEvents, heartbeatRuns, issues } from "@paperclipai/db";
 import { notFound } from "../errors.js";
 import { budgetService } from "./budgets.js";
 
@@ -27,6 +27,40 @@ export function dashboardService(db: Db) {
         .from(issues)
         .where(eq(issues.companyId, companyId))
         .groupBy(issues.status);
+
+      const agentUsageRows = await db
+        .select({
+          agentId: agents.id,
+          agentName: agents.name,
+          agentStatus: agents.status,
+          inputTokens: sql<number>`coalesce(${agentRuntimeState.totalInputTokens}, 0)::double precision`,
+          cachedInputTokens: sql<number>`coalesce(${agentRuntimeState.totalCachedInputTokens}, 0)::double precision`,
+          outputTokens: sql<number>`coalesce(${agentRuntimeState.totalOutputTokens}, 0)::double precision`,
+          lastError: agentRuntimeState.lastError,
+        })
+        .from(agents)
+        .leftJoin(
+          agentRuntimeState,
+          and(
+            eq(agentRuntimeState.agentId, agents.id),
+            eq(agentRuntimeState.companyId, companyId),
+          ),
+        )
+        .where(eq(agents.companyId, companyId));
+
+      const lastSuccessfulRunRows = await db
+        .select({
+          agentId: heartbeatRuns.agentId,
+          lastSuccessfulRunAt: sql<Date | null>`max(${heartbeatRuns.finishedAt})`,
+        })
+        .from(heartbeatRuns)
+        .where(
+          and(
+            eq(heartbeatRuns.companyId, companyId),
+            eq(heartbeatRuns.status, "succeeded"),
+          ),
+        )
+        .groupBy(heartbeatRuns.agentId);
 
       const pendingApprovals = await db
         .select({ count: sql<number>`count(*)` })
@@ -63,9 +97,13 @@ export function dashboardService(db: Db) {
 
       const now = new Date();
       const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      const [{ monthSpend }] = await db
+      const [{ monthSpend, monthInputTokens, monthCachedInputTokens, monthOutputTokens, monthCostEventCount }] = await db
         .select({
           monthSpend: sql<number>`coalesce(sum(${costEvents.costCents}), 0)::double precision`,
+          monthInputTokens: sql<number>`coalesce(sum(${costEvents.inputTokens}), 0)::double precision`,
+          monthCachedInputTokens: sql<number>`coalesce(sum(${costEvents.cachedInputTokens}), 0)::double precision`,
+          monthOutputTokens: sql<number>`coalesce(sum(${costEvents.outputTokens}), 0)::double precision`,
+          monthCostEventCount: sql<number>`count(*)::double precision`,
         })
         .from(costEvents)
         .where(
@@ -81,6 +119,64 @@ export function dashboardService(db: Db) {
           ? (monthSpendCents / company.budgetMonthlyCents) * 100
           : 0;
       const budgetOverview = await budgets.overview(companyId);
+      const lastSuccessfulRunByAgentId = new Map(
+        lastSuccessfulRunRows.map((row) => [row.agentId, row.lastSuccessfulRunAt ?? null]),
+      );
+      const agentUsage = agentUsageRows
+        .map((row) => ({
+          agentId: row.agentId,
+          agentName: row.agentName,
+          agentStatus: row.agentStatus,
+          inputTokens: Number(row.inputTokens ?? 0),
+          cachedInputTokens: Number(row.cachedInputTokens ?? 0),
+          outputTokens: Number(row.outputTokens ?? 0),
+          lastError: row.lastError ?? null,
+          lastSuccessfulRunAt: lastSuccessfulRunByAgentId.get(row.agentId) ?? null,
+        }))
+        .sort((left, right) => {
+          const leftTotal = left.inputTokens + left.cachedInputTokens + left.outputTokens;
+          const rightTotal = right.inputTokens + right.cachedInputTokens + right.outputTokens;
+          if (rightTotal !== leftTotal) return rightTotal - leftTotal;
+          return left.agentName.localeCompare(right.agentName);
+        });
+      const runtimeUsage = agentUsage.reduce(
+        (totals, row) => ({
+          inputTokens: totals.inputTokens + row.inputTokens,
+          cachedInputTokens: totals.cachedInputTokens + row.cachedInputTokens,
+          outputTokens: totals.outputTokens + row.outputTokens,
+        }),
+        { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 },
+      );
+      const monthUsage = {
+        inputTokens: Number(monthInputTokens),
+        cachedInputTokens: Number(monthCachedInputTokens),
+        outputTokens: Number(monthOutputTokens),
+      };
+      const monthUsageTotal = monthUsage.inputTokens + monthUsage.cachedInputTokens + monthUsage.outputTokens;
+      const runtimeUsageTotal = runtimeUsage.inputTokens + runtimeUsage.cachedInputTokens + runtimeUsage.outputTokens;
+      const usage =
+        Number(monthCostEventCount) > 0 || monthUsageTotal > 0
+          ? {
+              ...monthUsage,
+              totalTokens: monthUsageTotal,
+              source: "cost_events" as const,
+              isEstimated: false,
+            }
+          : runtimeUsageTotal > 0
+            ? {
+                ...runtimeUsage,
+                totalTokens: runtimeUsageTotal,
+                source: "runtime_state_estimate" as const,
+                isEstimated: true,
+              }
+            : {
+                inputTokens: 0,
+                cachedInputTokens: 0,
+                outputTokens: 0,
+                totalTokens: 0,
+                source: "none" as const,
+                isEstimated: false,
+              };
 
       return {
         companyId,
@@ -95,7 +191,9 @@ export function dashboardService(db: Db) {
           monthSpendCents,
           monthBudgetCents: company.budgetMonthlyCents,
           monthUtilizationPercent: Number(utilization.toFixed(2)),
+          usage,
         },
+        agentUsage,
         pendingApprovals,
         budgets: {
           activeIncidents: budgetOverview.activeIncidents.length,

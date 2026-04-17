@@ -173,6 +173,48 @@ describe("claude execute", () => {
     }
   });
 
+  it("builds the appended system prompt file from the managed instructions bundle", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-exec-instructions-"));
+    const { workspace, commandPath, capturePath, restore } = await setupExecuteEnv(root);
+    const instructionsFile = path.join(root, "instructions.md");
+    await fs.writeFile(
+      instructionsFile,
+      [
+        "# Agent instructions",
+        "",
+        "Stay on the assigned issue.",
+      ].join("\n"),
+      "utf-8",
+    );
+    try {
+      await execute({
+        runId: "run-instructions",
+        agent: { id: "agent-1", companyId: "co-1", name: "Test", adapterType: "claude_local", adapterConfig: {} },
+        runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+        config: {
+          command: commandPath,
+          cwd: workspace,
+          env: { PAPERCLIP_TEST_CAPTURE_PATH: capturePath },
+          promptTemplate: "Do work.",
+          instructionsFilePath: instructionsFile,
+        },
+        context: {},
+        authToken: "tok",
+        onLog: async () => {},
+        onMeta: async () => {},
+      });
+      const captured = JSON.parse(await fs.readFile(capturePath, "utf-8")) as CapturePayload;
+      expect(captured.appendedSystemPromptFileContents).toContain("# Agent instructions");
+      expect(captured.appendedSystemPromptFileContents).toContain("Stay on the assigned issue.");
+      expect(captured.appendedSystemPromptFileContents).toContain(
+        `The above agent instructions were loaded from ${instructionsFile}.`,
+      );
+    } finally {
+      restore();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("omits --append-system-prompt-file on a resumed session even when instructionsFile is set", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-exec-resume-"));
     const { workspace, commandPath, capturePath, restore } = await setupExecuteEnv(root);

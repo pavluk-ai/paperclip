@@ -281,7 +281,16 @@ const dashboard: DashboardSummary = {
     monthSpendCents: 900,
     monthBudgetCents: 1000,
     monthUtilizationPercent: 90,
+    usage: {
+      inputTokens: 1200,
+      cachedInputTokens: 300,
+      outputTokens: 120,
+      totalTokens: 1620,
+      source: "cost_events",
+      isEstimated: false,
+    },
   },
+  agentUsage: [],
   pendingApprovals: 1,
   budgets: {
     activeIncidents: 0,

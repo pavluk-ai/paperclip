@@ -18,7 +18,7 @@ import { StatusIcon } from "../components/StatusIcon";
 import { ActivityRow } from "../components/ActivityRow";
 import { Identity } from "../components/Identity";
 import { timeAgo } from "../lib/timeAgo";
-import { cn, formatCents } from "../lib/utils";
+import { cn, formatCents, formatTokens } from "../lib/utils";
 import { Bot, CircleDot, DollarSign, ShieldCheck, LayoutDashboard, PauseCircle } from "lucide-react";
 import { ActiveAgentsPanel } from "../components/ActiveAgentsPanel";
 import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
@@ -186,6 +186,31 @@ export function Dashboard() {
   }
 
   const hasNoAgents = agents !== undefined && agents.length === 0;
+  const usageValue =
+    data && data.costs.monthSpendCents === 0 && data.costs.usage.totalTokens > 0
+      ? `${formatTokens(data.costs.usage.totalTokens)} tok`
+      : data
+        ? formatCents(data.costs.monthSpendCents)
+        : formatCents(0);
+  const usageLabel =
+    data && data.costs.monthSpendCents === 0 && data.costs.usage.totalTokens > 0
+      ? (data.costs.usage.isEstimated ? "Tracked Usage" : "Month Usage")
+      : "Month Spend";
+  const usageDescription = data
+    ? (
+      <span>
+        {data.costs.monthSpendCents === 0 && data.costs.usage.totalTokens > 0
+          ? (
+            data.costs.usage.isEstimated
+              ? "No priced cost events yet; estimated from agent runtime totals."
+              : "Tracked from cost events even though priced spend is still $0.00."
+          )
+          : data.costs.monthBudgetCents > 0
+            ? `${data.costs.monthUtilizationPercent}% of ${formatCents(data.costs.monthBudgetCents)} budget`
+            : "Unlimited budget"}
+      </span>
+    )
+    : null;
 
   return (
     <div className="space-y-6">
@@ -259,16 +284,10 @@ export function Dashboard() {
             />
             <MetricCard
               icon={DollarSign}
-              value={formatCents(data.costs.monthSpendCents)}
-              label="Month Spend"
+              value={usageValue}
+              label={usageLabel}
               to="/costs"
-              description={
-                <span>
-                  {data.costs.monthBudgetCents > 0
-                    ? `${data.costs.monthUtilizationPercent}% of ${formatCents(data.costs.monthBudgetCents)} budget`
-                    : "Unlimited budget"}
-                </span>
-              }
+              description={usageDescription}
             />
             <MetricCard
               icon={ShieldCheck}
@@ -284,6 +303,57 @@ export function Dashboard() {
               }
             />
           </div>
+
+          {data.agentUsage.length > 0 && (
+            <div className="rounded-lg border border-border bg-card/60 p-4">
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground">Agent Usage</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Token totals come from live runtime state; last success reflects the latest successful run.
+                  </p>
+                </div>
+                <Link to="/agents" className="text-xs text-muted-foreground underline underline-offset-2">
+                  Open agents
+                </Link>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                      <th className="px-3 py-2 font-medium">Agent</th>
+                      <th className="px-3 py-2 text-right font-medium">In</th>
+                      <th className="px-3 py-2 text-right font-medium">Cached</th>
+                      <th className="px-3 py-2 text-right font-medium">Out</th>
+                      <th className="px-3 py-2 font-medium">Last success</th>
+                      <th className="px-3 py-2 font-medium">Last error</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.agentUsage.map((row) => (
+                      <tr key={row.agentId} className="border-b border-border/60 last:border-b-0">
+                        <td className="px-3 py-2">
+                          <div className="font-medium">{row.agentName}</div>
+                          <div className="text-xs text-muted-foreground">{row.agentStatus}</div>
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono">{formatTokens(row.inputTokens)}</td>
+                        <td className="px-3 py-2 text-right font-mono">{formatTokens(row.cachedInputTokens)}</td>
+                        <td className="px-3 py-2 text-right font-mono">{formatTokens(row.outputTokens)}</td>
+                        <td className="px-3 py-2 text-xs text-muted-foreground">
+                          {row.lastSuccessfulRunAt ? timeAgo(row.lastSuccessfulRunAt) : "Never"}
+                        </td>
+                        <td className="px-3 py-2 text-xs text-muted-foreground">
+                          <span className="line-clamp-2">
+                            {row.lastError?.trim().length ? row.lastError : "None"}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <ChartCard title="Run Activity" subtitle="Last 14 days">

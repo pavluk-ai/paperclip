@@ -61,6 +61,7 @@ import {
 } from "./execution-workspaces.js";
 import { workspaceOperationService } from "./workspace-operations.js";
 import { isProcessGroupAlive, terminateLocalService } from "./local-service-supervisor.js";
+import { documentService } from "./documents.js";
 import {
   buildExecutionWorkspaceAdapterConfig,
   gateProjectExecutionWorkspacePolicy,
@@ -81,7 +82,10 @@ import {
   writePaperclipSkillSyncPreference,
 } from "@paperclipai/adapter-utils/server-utils";
 import { extractSkillMentionIds } from "@paperclipai/shared";
-import { reconcileSourceBackedSessionContext, repoAgentInstructionsService } from "./repo-agent-instructions.js";
+import {
+  computeExecutionContextFingerprint,
+  reconcileExecutionContextFingerprint,
+} from "./execution-context-fingerprint.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -697,6 +701,23 @@ function summarizeRunFailureForIssueComment(
   return null;
 }
 
+function runLooksLikeSubscriptionExhaustion(
+  run: Pick<typeof heartbeatRuns.$inferSelect, "error" | "errorCode"> | null | undefined,
+) {
+  if (!run) return false;
+  const haystack = [readNonEmptyString(run.error), readNonEmptyString(run.errorCode)]
+    .filter((value): value is string => Boolean(value))
+    .join("\n")
+    .toLowerCase();
+  if (!haystack) return false;
+  return (
+    haystack.includes("hit your limit")
+    || haystack.includes("subscription limit")
+    || haystack.includes("usage cap")
+    || (haystack.includes("resets") && haystack.includes("limit"))
+  );
+}
+
 type TimeoutRecoveryClassification = "clean_timeout" | "dirty_timeout_recovery_required";
 
 type TimeoutRecoverySummary = {
@@ -1168,6 +1189,10 @@ function describeSessionResetReason(
   return null;
 }
 
+function canResumeBlockedIssueForWake(wakeReason: string | null) {
+  return wakeReason === "issue_blockers_resolved" || wakeReason === "issue_children_completed";
+}
+
 function shouldAutoCheckoutIssueForWake(input: {
   contextSnapshot: Record<string, unknown> | null | undefined;
   issueStatus: string | null;
@@ -1190,7 +1215,7 @@ function shouldAutoCheckoutIssueForWake(input: {
   if (wakeReason === "issue_comment_mentioned") return false;
   if (wakeReason.startsWith("execution_")) return false;
   if (issueStatus === "blocked") {
-    return wakeReason === "issue_blockers_resolved";
+    return canResumeBlockedIssueForWake(wakeReason);
   }
 
   return true;
@@ -1632,7 +1657,7 @@ export function heartbeatService(db: Db) {
   const runLogStore = getRunLogStore();
   const secretsSvc = secretService(db);
   const companySkills = companySkillService(db);
-  const repoInstructions = repoAgentInstructionsService(db);
+  const documentsSvc = documentService(db);
   const issuesSvc = issueService(db);
   const executionWorkspacesSvc = executionWorkspaceService(db);
   const workspaceOperationsSvc = workspaceOperationService(db);
@@ -1672,6 +1697,7 @@ export function heartbeatService(db: Db) {
         id: issues.id,
         identifier: issues.identifier,
         title: issues.title,
+        description: issues.description,
         parentId: issues.parentId,
         status: issues.status,
         priority: issues.priority,
@@ -1749,7 +1775,7 @@ export function heartbeatService(db: Db) {
     if (TERMINAL_ISSUE_STATUSES.has(issueContext.status)) {
       return `Cancelled because the issue is already ${issueContext.status}`;
     }
-    if (issueContext.status === "blocked" && wakeReason !== "issue_blockers_resolved") {
+    if (issueContext.status === "blocked" && !canResumeBlockedIssueForWake(wakeReason)) {
       return "Cancelled because the issue is blocked";
     }
 
@@ -3303,6 +3329,27 @@ export function heartbeatService(db: Db) {
       const latestContext = parseObject(latestRun?.contextSnapshot);
       const latestRetryReason = readNonEmptyString(latestContext.retryReason);
       const executionPolicyMode = readIssueExecutionPolicyMode(issue.executionPolicy);
+      const subscriptionExhausted = runLooksLikeSubscriptionExhaustion(latestRun);
+
+      if (subscriptionExhausted) {
+        const failureSummary = summarizeRunFailureForIssueComment(latestRun);
+        const updated = await escalateStrandedAssignedIssue({
+          issue,
+          previousStatus: issue.status === "todo" ? "todo" : "in_progress",
+          latestRun,
+          comment:
+            "Paperclip stopped automatic retries for this assigned issue because the latest run appears to have hit " +
+            `a provider subscription limit.${failureSummary ?? ""} ` +
+            "Moving it to `blocked`; wait for the limit reset or resume manually after credentials are fixed.",
+        });
+        if (updated) {
+          result.escalated += 1;
+          result.issueIds.push(issue.id);
+        } else {
+          result.skipped += 1;
+        }
+        continue;
+      }
 
       if (issue.status === "todo") {
         if (!latestRun || latestRun.status === "succeeded") {
@@ -3560,23 +3607,6 @@ export function heartbeatService(db: Db) {
           )
         : null;
     const config = parseObject(agent.adapterConfig);
-    const repoBackedInstructions = await repoInstructions.prepareRuntimePacket(agent, issueId);
-    let sourceBackedSessionResetReason: string | null = null;
-    if (repoBackedInstructions) {
-      const reconciled = reconcileSourceBackedSessionContext(context, repoBackedInstructions.hash);
-      context = reconciled.contextSnapshot;
-      if (reconciled.changed) {
-        sourceBackedSessionResetReason = reconciled.previousHash
-          ? `repo-backed instructions changed (${reconciled.previousHash.slice(0, 8)} -> ${repoBackedInstructions.hash.slice(0, 8)})`
-          : `repo-backed instructions were refreshed (${repoBackedInstructions.hash.slice(0, 8)})`;
-      }
-      context.instructionsSourceKind = repoBackedInstructions.kind;
-      context.instructionsSourceVersion = repoBackedInstructions.version;
-      context.instructionsSourceHash = repoBackedInstructions.hash;
-      context.instructionsSourceFilePath = repoBackedInstructions.instructionsFilePath;
-      context.instructionsSourceIssueDocumentKeys = repoBackedInstructions.issueDocumentKeys;
-      context.instructionsSourceRepoDocs = repoBackedInstructions.linkedRepoPaths;
-    }
     const isolatedWorkspacesEnabled = (await instanceSettings.getExperimental()).enableIsolatedWorkspaces;
     const issueExecutionWorkspaceSettings = isolatedWorkspacesEnabled
       ? parseIssueExecutionWorkspaceSettings(issueContext?.executionWorkspaceSettings)
@@ -3597,35 +3627,11 @@ export function heartbeatService(db: Db) {
       parseProjectExecutionWorkspacePolicy(projectContext?.executionWorkspacePolicy),
       isolatedWorkspacesEnabled,
     );
-    const taskSession = taskKey
-      ? await getTaskSession(agent.companyId, agent.id, agent.adapterType, taskKey)
-      : null;
-    const resetTaskSession = shouldResetTaskSessionForWake(context);
-    const sessionResetReason = sourceBackedSessionResetReason ?? describeSessionResetReason(context);
-    const taskSessionForRun = resetTaskSession ? null : taskSession;
-    const explicitResumeSessionParams = normalizeSessionParams(
-      sessionCodec.deserialize(parseObject(context.resumeSessionParams)),
-    );
-    const explicitResumeSessionDisplayId = truncateDisplayId(
-      readNonEmptyString(context.resumeSessionDisplayId) ??
-        (sessionCodec.getDisplayId ? sessionCodec.getDisplayId(explicitResumeSessionParams) : null) ??
-        readNonEmptyString(explicitResumeSessionParams?.sessionId),
-    );
-    const previousSessionParams =
-      explicitResumeSessionParams ??
-      (explicitResumeSessionDisplayId ? { sessionId: explicitResumeSessionDisplayId } : null) ??
-      normalizeSessionParams(sessionCodec.deserialize(taskSessionForRun?.sessionParamsJson ?? null));
     const requestedExecutionWorkspaceMode = resolveExecutionWorkspaceMode({
       projectPolicy: projectExecutionWorkspacePolicy,
       issueSettings: issueExecutionWorkspaceSettings,
       legacyUseProjectWorkspace: issueAssigneeOverrides?.useProjectWorkspace ?? null,
     });
-    const resolvedWorkspace = await resolveWorkspaceForRun(
-      agent,
-      context,
-      previousSessionParams,
-      { useProjectWorkspace: requestedExecutionWorkspaceMode !== "agent_default" },
-    );
     const issueRef = issueContext
       ? {
           id: issueContext.id,
@@ -3639,25 +3645,6 @@ export function heartbeatService(db: Db) {
           executionWorkspacePreference: issueContext.executionWorkspacePreference,
         }
       : null;
-    const paperclipWakePayload = await buildPaperclipWakePayload({
-      db,
-      companyId: agent.companyId,
-      contextSnapshot: context,
-      issueSummary: issueRef
-        ? {
-            id: issueRef.id,
-            identifier: issueRef.identifier,
-            title: issueRef.title,
-            status: issueRef.status,
-            priority: issueRef.priority,
-          }
-        : null,
-    });
-    if (paperclipWakePayload) {
-      context[PAPERCLIP_WAKE_PAYLOAD_KEY] = paperclipWakePayload;
-    } else {
-      delete context[PAPERCLIP_WAKE_PAYLOAD_KEY];
-    }
     const existingExecutionWorkspace =
       issueRef?.executionWorkspaceId ? await executionWorkspacesSvc.getById(issueRef.executionWorkspaceId) : null;
     const shouldReuseExisting =
@@ -3692,8 +3679,65 @@ export function heartbeatService(db: Db) {
       : persistedWorkspaceManagedConfig;
     const configSnapshot = buildExecutionWorkspaceConfigSnapshot(mergedConfig);
     const executionRunConfig = stripWorkspaceRuntimeFromExecutionRunConfig(mergedConfig);
-    if (repoBackedInstructions) {
-      executionRunConfig.instructionsFilePath = repoBackedInstructions.instructionsFilePath;
+    const issueDocumentsForFingerprint = issueId ? await documentsSvc.listIssueDocuments(issueId) : [];
+    const executionContextFingerprint = await computeExecutionContextFingerprint({
+      instructionsFilePath: readNonEmptyString(executionRunConfig.instructionsFilePath),
+      issueId,
+      issueDescription: issueContext?.description ?? null,
+      issueDocuments: issueDocumentsForFingerprint,
+    });
+    const reconciledExecutionContext = reconcileExecutionContextFingerprint(
+      context,
+      executionContextFingerprint,
+    );
+    context = reconciledExecutionContext.contextSnapshot;
+    const taskSession = taskKey
+      ? await getTaskSession(agent.companyId, agent.id, agent.adapterType, taskKey)
+      : null;
+    const resetTaskSession = shouldResetTaskSessionForWake(context);
+    const executionContextResetReason = reconciledExecutionContext.changed
+      ? reconciledExecutionContext.previousFingerprint
+        ? `execution context changed (${reconciledExecutionContext.previousFingerprint.slice(0, 8)} -> ${executionContextFingerprint.slice(0, 8)})`
+        : `execution context initialized (${executionContextFingerprint.slice(0, 8)})`
+      : null;
+    const sessionResetReason = executionContextResetReason ?? describeSessionResetReason(context);
+    const taskSessionForRun = resetTaskSession ? null : taskSession;
+    const explicitResumeSessionParams = normalizeSessionParams(
+      sessionCodec.deserialize(parseObject(context.resumeSessionParams)),
+    );
+    const explicitResumeSessionDisplayId = truncateDisplayId(
+      readNonEmptyString(context.resumeSessionDisplayId) ??
+        (sessionCodec.getDisplayId ? sessionCodec.getDisplayId(explicitResumeSessionParams) : null) ??
+        readNonEmptyString(explicitResumeSessionParams?.sessionId),
+    );
+    const previousSessionParams =
+      explicitResumeSessionParams ??
+      (explicitResumeSessionDisplayId ? { sessionId: explicitResumeSessionDisplayId } : null) ??
+      normalizeSessionParams(sessionCodec.deserialize(taskSessionForRun?.sessionParamsJson ?? null));
+    const resolvedWorkspace = await resolveWorkspaceForRun(
+      agent,
+      context,
+      previousSessionParams,
+      { useProjectWorkspace: requestedExecutionWorkspaceMode !== "agent_default" },
+    );
+    const paperclipWakePayload = await buildPaperclipWakePayload({
+      db,
+      companyId: agent.companyId,
+      contextSnapshot: context,
+      issueSummary: issueRef
+        ? {
+            id: issueRef.id,
+            identifier: issueRef.identifier,
+            title: issueRef.title,
+            status: issueRef.status,
+            priority: issueRef.priority,
+          }
+        : null,
+    });
+    if (paperclipWakePayload) {
+      context[PAPERCLIP_WAKE_PAYLOAD_KEY] = paperclipWakePayload;
+    } else {
+      delete context[PAPERCLIP_WAKE_PAYLOAD_KEY];
     }
     const { resolvedConfig, secretKeys } = await resolveExecutionRunAdapterConfig({
       companyId: agent.companyId,
@@ -3897,11 +3941,6 @@ export function heartbeatService(db: Db) {
     });
     const runtimeSessionParams = runtimeSessionResolution.sessionParams;
     const runtimeWorkspaceWarnings = [
-      ...(repoBackedInstructions
-        ? [
-            `Using repo-backed runtime instructions ${repoBackedInstructions.hash.slice(0, 8)} from ${repoBackedInstructions.instructionsFilePath}.`,
-          ]
-        : []),
       ...resolvedWorkspace.warnings,
       ...executionWorkspace.warnings,
       ...(runtimeSessionResolution.warning ? [runtimeSessionResolution.warning] : []),
@@ -4034,24 +4073,6 @@ export function heartbeatService(db: Db) {
         level: "info",
         message: "run started",
       });
-      if (repoBackedInstructions) {
-        await appendRunEvent(currentRun, seq++, {
-          eventType: "instructions.source",
-          stream: "system",
-          level: "info",
-          message: "repo-backed runtime instructions prepared",
-          payload: {
-            kind: repoBackedInstructions.kind,
-            version: repoBackedInstructions.version,
-            hash: repoBackedInstructions.hash,
-            filePath: repoBackedInstructions.instructionsFilePath,
-            issueDocumentKeys: repoBackedInstructions.issueDocumentKeys,
-            linkedRepoPaths: repoBackedInstructions.linkedRepoPaths,
-            lanePromptPath: repoBackedInstructions.lanePromptPath,
-            laneName: repoBackedInstructions.laneName,
-          },
-        });
-      }
 
       handle = await runLogStore.begin({
         companyId: run.companyId,

@@ -741,6 +741,15 @@ function clonePortableRecord(value: unknown) {
   return structuredClone(value) as Record<string, unknown>;
 }
 
+function stripLegacyInstructionsSourceMetadata(
+  metadata: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  if (!metadata) return null;
+  const next = { ...metadata };
+  delete next.instructionsSource;
+  return Object.keys(next).length > 0 ? next : null;
+}
+
 function disableImportedTimerHeartbeat(runtimeConfig: unknown) {
   const next = clonePortableRecord(runtimeConfig) ?? {};
   const heartbeat = isPlainRecord(next.heartbeat) ? { ...next.heartbeat } : {};
@@ -2460,7 +2469,9 @@ function buildManifestFromPackageFiles(
     const extensionAdapter = isPlainRecord(extension.adapter) ? extension.adapter : null;
     const extensionRuntime = isPlainRecord(extension.runtime) ? extension.runtime : null;
     const extensionPermissions = isPlainRecord(extension.permissions) ? extension.permissions : null;
-    const extensionMetadata = isPlainRecord(extension.metadata) ? extension.metadata : null;
+    const extensionMetadata = stripLegacyInstructionsSourceMetadata(
+      isPlainRecord(extension.metadata) ? extension.metadata : null,
+    );
     const adapterConfig = isPlainRecord(extensionAdapter?.config)
       ? extensionAdapter.config
       : {};
@@ -3299,7 +3310,9 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
           runtime: portableRuntimeConfig,
           permissions: portablePermissions,
           budgetMonthlyCents: (agent.budgetMonthlyCents ?? 0) > 0 ? agent.budgetMonthlyCents : undefined,
-          metadata: (agent.metadata as Record<string, unknown> | null) ?? null,
+          metadata: stripLegacyInstructionsSourceMetadata(
+            (agent.metadata as Record<string, unknown> | null) ?? null,
+          ),
         });
         if (isPlainRecord(extension) && agentEnvInputs.length > 0) {
           extension.inputs = {
@@ -4171,7 +4184,7 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
           runtimeConfig: disableImportedTimerHeartbeat(manifestAgent.runtimeConfig),
           budgetMonthlyCents: manifestAgent.budgetMonthlyCents,
           permissions: manifestAgent.permissions,
-          metadata: manifestAgent.metadata,
+          metadata: stripLegacyInstructionsSourceMetadata(manifestAgent.metadata),
         };
 
         if (planAgent.action === "update" && planAgent.existingAgentId) {

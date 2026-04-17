@@ -410,10 +410,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   if (instructionsFilePath) {
     try {
       const instructionsContents = await fs.readFile(instructionsFilePath, "utf8");
-      instructionsPrefix =
-        `${instructionsContents}\n\n` +
+      instructionsPrefix = `${joinPromptSections([
+        instructionsContents,
         `The above agent instructions were loaded from ${instructionsFilePath}. ` +
-        `Resolve any relative file references from ${instructionsDir}.\n\n`;
+          `Resolve any relative file references from ${instructionsDir}.`,
+      ])}\n\n`;
       instructionsChars = instructionsPrefix.length;
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
@@ -424,7 +425,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     }
   }
   const repoAgentsNote =
-    "Codex exec automatically applies repo-scoped AGENTS.md instructions from the current workspace; Paperclip does not currently suppress that discovery.";
+    "Codex exec automatically applies repo-scoped AGENTS.md instructions from the current workspace.";
   const bootstrapPromptTemplate = asString(config.bootstrapPromptTemplate, "");
   const templateData = {
     agentId: agent.id,

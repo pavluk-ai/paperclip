@@ -252,4 +252,35 @@ describe("issue update comment wakeups", () => {
       }),
     );
   });
+
+  it("does not auto-wake checkpoint issues on comment-only updates without an explicit mention", async () => {
+    const existing = makeIssue({
+      assigneeAgentId: ASSIGNEE_AGENT_ID,
+      assigneeUserId: null,
+      status: "in_progress",
+      executionPolicy: {
+        mode: "checkpoint",
+        commentRequired: true,
+        stages: [],
+      },
+    });
+    const updated = { ...existing };
+    mockIssueService.getById.mockResolvedValue(existing);
+    mockIssueService.update.mockResolvedValue(updated);
+    mockIssueService.addComment.mockResolvedValue({
+      id: "comment-3",
+      issueId: existing.id,
+      companyId: existing.companyId,
+      body: "status check",
+    });
+
+    const res = await request(await createApp())
+      .patch(`/api/issues/${existing.id}`)
+      .send({
+        comment: "status check",
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+  });
 });

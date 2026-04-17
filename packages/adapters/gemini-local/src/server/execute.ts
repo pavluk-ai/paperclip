@@ -260,10 +260,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   if (instructionsFilePath) {
     try {
       const instructionsContents = await fs.readFile(instructionsFilePath, "utf8");
-      instructionsPrefix =
-        `${instructionsContents}\n\n` +
+      instructionsPrefix = `${joinPromptSections([
+        instructionsContents,
         `The above agent instructions were loaded from ${instructionsFilePath}. ` +
-        `Resolve any relative file references from ${instructionsDir}.\n\n`;
+          `Resolve any relative file references from ${instructionsDir}.`,
+      ])}\n\n`;
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       await onLog(

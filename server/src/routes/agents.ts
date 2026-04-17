@@ -477,6 +477,14 @@ export function agentRoutes(db: Db) {
     return trimmed.length > 0 ? trimmed : null;
   }
 
+  function stripLegacyInstructionsSourceMetadata(value: unknown) {
+    const metadata = asRecord(value);
+    if (!metadata) return null;
+    const next = { ...metadata };
+    delete next.instructionsSource;
+    return Object.keys(next).length > 0 ? next : null;
+  }
+
   function preserveInstructionsBundleConfig(
     existingAdapterConfig: Record<string, unknown>,
     nextAdapterConfig: Record<string, unknown>,
@@ -1428,6 +1436,7 @@ export function agentRoutes(db: Db) {
       ...hireInput,
       adapterConfig: normalizedAdapterConfig,
       runtimeConfig: normalizeNewAgentRuntimeConfig(hireInput.runtimeConfig),
+      metadata: stripLegacyInstructionsSourceMetadata(hireInput.metadata),
     };
 
     const company = await db
@@ -1959,6 +1968,9 @@ export function agentRoutes(db: Db) {
     const patchData = { ...(req.body as Record<string, unknown>) };
     const replaceAdapterConfig = patchData.replaceAdapterConfig === true;
     delete patchData.replaceAdapterConfig;
+    if (hasOwn(patchData, "metadata")) {
+      patchData.metadata = stripLegacyInstructionsSourceMetadata(patchData.metadata);
+    }
     if (hasOwn(patchData, "adapterConfig")) {
       const adapterConfig = asRecord(patchData.adapterConfig);
       if (!adapterConfig) {

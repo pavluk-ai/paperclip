@@ -281,7 +281,88 @@ describe("codex execute", () => {
       expect(result.exitCode).toBe(0);
       expect(result.errorMessage).toBeNull();
       expect(commandNotes).toContain(
-        "Codex exec automatically applies repo-scoped AGENTS.md instructions from the current workspace; Paperclip does not currently suppress that discovery.",
+        "Codex exec automatically applies repo-scoped AGENTS.md instructions from the current workspace.",
+      );
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("passes managed instructions through without packet-specific stripping", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-codex-execute-instructions-"));
+    const workspace = path.join(root, "workspace");
+    const commandPath = path.join(root, "codex");
+    const capturePath = path.join(root, "capture.json");
+    const instructionsPath = path.join(root, "instructions.md");
+    await fs.mkdir(workspace, { recursive: true });
+    await writeFakeCodexCommand(commandPath);
+    await fs.writeFile(
+      instructionsPath,
+      [
+        "## Repository Instructions",
+        "# Repo Rules",
+        "",
+        "Stay in scope.",
+        "",
+        "## Lane Addendum — Senior Implementer",
+        "",
+        "Implement only the linked contract.",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const previousHome = process.env.HOME;
+    process.env.HOME = root;
+
+    let invocationPrompt = "";
+    let commandNotes: string[] = [];
+    try {
+      const result = await execute({
+        runId: "run-instructions",
+        agent: {
+          id: "agent-1",
+          companyId: "company-1",
+          name: "Codex Coder",
+          adapterType: "codex_local",
+          adapterConfig: {},
+        },
+        runtime: {
+          sessionId: null,
+          sessionParams: null,
+          sessionDisplayId: null,
+          taskKey: null,
+        },
+        config: {
+          command: commandPath,
+          cwd: workspace,
+          instructionsFilePath: instructionsPath,
+          env: {
+            PAPERCLIP_TEST_CAPTURE_PATH: capturePath,
+          },
+          promptTemplate: "Follow the paperclip heartbeat.",
+        },
+        context: {},
+        authToken: "run-jwt-token",
+        onLog: async () => {},
+        onMeta: async (meta) => {
+          invocationPrompt = meta.prompt ?? "";
+          commandNotes = Array.isArray(meta.commandNotes) ? meta.commandNotes : [];
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.errorMessage).toBeNull();
+
+      const capture = JSON.parse(await fs.readFile(capturePath, "utf8")) as CapturePayload;
+      expect(capture.prompt).toContain("## Repository Instructions");
+      expect(capture.prompt).toContain("# Repo Rules");
+      expect(capture.prompt).toContain("Implement only the linked contract.");
+      expect(invocationPrompt).toContain("Implement only the linked contract.");
+      expect(invocationPrompt).toContain("## Repository Instructions");
+      expect(commandNotes).not.toContain(
+        "Removed duplicate repo AGENTS.md section from stdin instructions because Codex will load workspace AGENTS.md separately.",
       );
     } finally {
       if (previousHome === undefined) delete process.env.HOME;

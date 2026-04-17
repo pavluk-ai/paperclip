@@ -103,6 +103,18 @@ function executionPrincipalsEqual(
   return left.type === "agent" ? left.agentId === right.agentId : left.userId === right.userId;
 }
 
+function readIssueExecutionPolicyMode(value: unknown): "normal" | "auto" | "checkpoint" {
+  const parsed =
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : null;
+  return parsed?.mode === "checkpoint"
+    ? "checkpoint"
+    : parsed?.mode === "auto"
+      ? "auto"
+      : "normal";
+}
+
 function buildExecutionStageWakeContext(input: {
   state: ParsedExecutionState;
   wakeRole: ExecutionStageWakeContext["wakeRole"];
@@ -1855,11 +1867,13 @@ export function issueRoutes(
     const statusChanged =
       typeof req.body.status === "string" &&
       existing.status !== issue.status;
+    const isCheckpointIssue = readIssueExecutionPolicyMode(issue.executionPolicy) === "checkpoint";
     const childEnteredParentReconciliationState =
       statusChanged &&
       PARENT_RECONCILIATION_CHILD_STATUSES.has(issue.status);
     const sameAssigneeManagerHandoff =
       statusChanged &&
+      !isCheckpointIssue &&
       !assigneeChanged &&
       !statusChangedFromBacklog &&
       Boolean(commentBody && comment) &&
@@ -2011,6 +2025,7 @@ export function issueRoutes(
           !statusChanged &&
           !sameAssigneeManagerHandoff &&
           !statusChangedFromBacklog &&
+          !isCheckpointIssue &&
           issue.status !== "todo";
 
         const skipAssigneeCommentWake = selfComment || isClosed;
@@ -2604,7 +2619,8 @@ export function issueRoutes(
       const assigneeId = currentIssue.assigneeAgentId;
       const actorIsAgent = actor.actorType === "agent";
       const selfComment = actorIsAgent && actor.actorId === assigneeId;
-      const skipWake = selfComment || isClosed;
+      const isCheckpointIssue = readIssueExecutionPolicyMode(currentIssue.executionPolicy) === "checkpoint";
+      const skipWake = selfComment || isClosed || (!reopened && isCheckpointIssue);
       if (assigneeId && (reopened || !skipWake)) {
         if (reopened) {
           wakeups.set(assigneeId, {
