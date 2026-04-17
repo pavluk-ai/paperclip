@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useParams, useNavigate, Link, Navigate, useBeforeUnload } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { accessApi } from "../api/access";
 import {
   agentsApi,
   type AgentKey,
@@ -84,7 +83,6 @@ import {
   isUuidLike,
   type Agent,
   type AgentRuntimeState,
-  type CompanyMemberRecord,
   type AgentSkillEntry,
   type AgentSkillSnapshot,
   type AgentDetail as AgentDetailRecord,
@@ -686,15 +684,6 @@ export function AgentDetail() {
     enabled: !!resolvedCompanyId && needsDashboardData,
   });
 
-  const { data: members, error: membersError } = useQuery({
-    queryKey: resolvedCompanyId
-      ? queryKeys.access.members(resolvedCompanyId)
-      : ["access", "members", "none"],
-    queryFn: () => accessApi.listMembers(resolvedCompanyId!),
-    enabled: !!resolvedCompanyId,
-  });
-  const membersLoading = Boolean(resolvedCompanyId) && !members && !membersError;
-
   const { data: budgetOverview } = useQuery({
     queryKey: queryKeys.budgets.overview(resolvedCompanyId ?? "__none__"),
     queryFn: () => budgetsApi.overview(resolvedCompanyId!),
@@ -707,11 +696,6 @@ export function AgentDetail() {
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   const reportsToAgent = (allAgents ?? []).find((a) => a.id === agent?.reportsTo);
   const directReports = (allAgents ?? []).filter((a) => a.reportsTo === agent?.id && a.status !== "terminated");
-  const accessMembership =
-    (members ?? []).find(
-      (member) => member.principalType === "agent" && member.principalId === agent?.id,
-    ) ?? null;
-  const accessError = membersError instanceof Error ? membersError : null;
 
   const agentBudgetSummary = useMemo(() => {
     const matched = budgetOverview?.policies.find(
@@ -1110,9 +1094,6 @@ export function AgentDetail() {
           runtimeState={runtimeState}
           agentId={agent.id}
           agentRouteId={canonicalAgentRef}
-          accessMembership={accessMembership}
-          accessError={accessError}
-          accessLoading={membersLoading}
         />
       )}
 
@@ -1137,9 +1118,6 @@ export function AgentDetail() {
           onCancelActionChange={setCancelConfigAction}
           onSavingChange={setConfigSaving}
           updatePermissions={updatePermissions}
-          accessMembership={accessMembership}
-          accessError={accessError}
-          accessLoading={membersLoading}
         />
       )}
 
@@ -1183,82 +1161,6 @@ function SummaryRow({ label, children }: { label: string; children: React.ReactN
     <div className="flex items-center justify-between">
       <span className="text-muted-foreground text-xs">{label}</span>
       <div className="flex items-center gap-1">{children}</div>
-    </div>
-  );
-}
-
-function AgentAccessCard({
-  agent,
-  accessMembership,
-  accessError,
-  accessLoading,
-}: {
-  agent: Agent;
-  accessMembership: CompanyMemberRecord | null;
-  accessError: Error | null;
-  accessLoading: boolean;
-}) {
-  const runtimeAccessible = agent.status !== "pending_approval" && agent.status !== "terminated";
-  const showWarning =
-    !accessLoading && runtimeAccessible && (!accessMembership || accessMembership.status !== "active");
-
-  return (
-    <div
-      className={cn(
-        "rounded-lg border p-4",
-        showWarning ? "border-amber-300 bg-amber-50/70" : "border-border",
-      )}
-    >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-medium">Access</h3>
-        {accessMembership ? <StatusBadge status={accessMembership.status} /> : null}
-      </div>
-      {accessError ? (
-        <p className="mt-2 text-sm text-destructive">{accessError.message}</p>
-      ) : accessLoading ? (
-        <p className="mt-2 text-sm text-muted-foreground">Loading company access membership…</p>
-      ) : accessMembership ? (
-        <>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Company membership and explicit grants for this agent.
-          </p>
-          <div className="mt-3 flex flex-wrap gap-1.5">
-            {accessMembership.grants.length > 0 ? (
-              accessMembership.grants.map((grant) => (
-                <span
-                  key={grant.id}
-                  className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground"
-                >
-                  {grant.permissionKey}
-                </span>
-              ))
-            ) : (
-              <span className="text-xs text-muted-foreground">No explicit grants</span>
-            )}
-          </div>
-          {showWarning && (
-            <p className="mt-3 text-sm text-amber-900">
-              This agent has runtime access but its company membership is not active. Open{" "}
-              <Link to="/company/settings#access" className="underline">
-                Company Settings
-              </Link>{" "}
-              to fix access.
-            </p>
-          )}
-        </>
-      ) : runtimeAccessible ? (
-        <p className="mt-2 text-sm text-amber-900">
-          This agent is runtime-accessible but has no company access membership. Open{" "}
-          <Link to="/company/settings#access" className="underline">
-            Company Settings
-          </Link>{" "}
-          to diagnose the drift.
-        </p>
-      ) : (
-        <p className="mt-2 text-sm text-muted-foreground">
-          No company access membership is present for this agent.
-        </p>
-      )}
     </div>
   );
 }
@@ -1359,9 +1261,6 @@ function AgentOverview({
   runtimeState,
   agentId,
   agentRouteId,
-  accessMembership,
-  accessError,
-  accessLoading,
 }: {
   agent: AgentDetailRecord;
   runs: HeartbeatRun[];
@@ -1369,21 +1268,11 @@ function AgentOverview({
   runtimeState?: AgentRuntimeState;
   agentId: string;
   agentRouteId: string;
-  accessMembership: CompanyMemberRecord | null;
-  accessError: Error | null;
-  accessLoading: boolean;
 }) {
   return (
     <div className="space-y-8">
       {/* Latest Run */}
       <LatestRunCard runs={runs} agentId={agentRouteId} />
-
-      <AgentAccessCard
-        agent={agent}
-        accessMembership={accessMembership}
-        accessError={accessError}
-        accessLoading={accessLoading}
-      />
 
       {/* Charts */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -1532,9 +1421,6 @@ function AgentConfigurePage({
   onCancelActionChange,
   onSavingChange,
   updatePermissions,
-  accessMembership,
-  accessError,
-  accessLoading,
 }: {
   agent: AgentDetailRecord;
   agentId: string;
@@ -1544,9 +1430,6 @@ function AgentConfigurePage({
   onCancelActionChange: (cancel: (() => void) | null) => void;
   onSavingChange: (saving: boolean) => void;
   updatePermissions: { mutate: (permissions: AgentPermissionUpdate) => void; isPending: boolean };
-  accessMembership: CompanyMemberRecord | null;
-  accessError: Error | null;
-  accessLoading: boolean;
 }) {
   const queryClient = useQueryClient();
   const [revisionsOpen, setRevisionsOpen] = useState(false);
@@ -1575,9 +1458,6 @@ function AgentConfigurePage({
         onSavingChange={onSavingChange}
         updatePermissions={updatePermissions}
         companyId={companyId}
-        accessMembership={accessMembership}
-        accessError={accessError}
-        accessLoading={accessLoading}
         hidePromptTemplate
         hideInstructionsFile
       />
@@ -1650,9 +1530,6 @@ function ConfigurationTab({
   onCancelActionChange,
   onSavingChange,
   updatePermissions,
-  accessMembership,
-  accessError,
-  accessLoading,
   hidePromptTemplate,
   hideInstructionsFile,
 }: {
@@ -1663,9 +1540,6 @@ function ConfigurationTab({
   onCancelActionChange: (cancel: (() => void) | null) => void;
   onSavingChange: (saving: boolean) => void;
   updatePermissions: { mutate: (permissions: AgentPermissionUpdate) => void; isPending: boolean };
-  accessMembership: CompanyMemberRecord | null;
-  accessError: Error | null;
-  accessLoading: boolean;
   hidePromptTemplate?: boolean;
   hideInstructionsFile?: boolean;
 }) {
@@ -1733,12 +1607,6 @@ function ConfigurationTab({
 
   return (
     <div className="space-y-6">
-      <AgentAccessCard
-        agent={agent}
-        accessMembership={accessMembership}
-        accessError={accessError}
-        accessLoading={accessLoading}
-      />
       <AgentConfigForm
         mode="edit"
         agent={agent}
