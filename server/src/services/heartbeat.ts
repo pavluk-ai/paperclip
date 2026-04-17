@@ -1767,11 +1767,12 @@ export function heartbeatService(db: Db) {
   }) {
     const { issueContext } = input;
     if (!issueContext) return "Cancelled because the assigned issue no longer exists";
-    if (issueContext.assigneeAgentId !== input.agentId) {
+    const wakeReason = readNonEmptyString(input.contextSnapshot?.wakeReason);
+    const allowsNonAssigneeExecution = wakeReason === "issue_comment_mentioned";
+    if (!allowsNonAssigneeExecution && issueContext.assigneeAgentId !== input.agentId) {
       return "Cancelled because the issue is no longer assigned to this agent";
     }
 
-    const wakeReason = readNonEmptyString(input.contextSnapshot?.wakeReason);
     if (TERMINAL_ISSUE_STATUSES.has(issueContext.status)) {
       return `Cancelled because the issue is already ${issueContext.status}`;
     }
@@ -4759,11 +4760,12 @@ export function heartbeatService(db: Db) {
         : null;
       const hasActiveExecutionRun =
         issueExecutionRun?.status === "queued" || issueExecutionRun?.status === "running";
-      const hasStaleExecutionLock = Boolean(issue.executionRunId) && !hasActiveExecutionRun;
+      const hasExecutionLock = issue.executionRunId !== null;
+      const hasStaleExecutionLock = hasExecutionLock && !hasActiveExecutionRun;
       const repairedOrphanedLock =
         hasStaleExecutionLock && issue.executionRunId !== null && issue.executionRunId !== run.id;
 
-      if (!hasStaleExecutionLock && issue.executionRunId !== run.id) {
+      if (hasExecutionLock && !hasStaleExecutionLock && issue.executionRunId !== run.id) {
         return {
           promotedRun: null as typeof heartbeatRuns.$inferSelect | null,
           repairedOrphanedLock: false,
