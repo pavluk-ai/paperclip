@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   ISSUE_EXECUTION_DECISION_OUTCOMES,
+  ISSUE_EXECUTION_FOLLOW_UP_MODES,
   ISSUE_EXECUTION_POLICY_MODES,
   ISSUE_EXECUTION_STAGE_TYPES,
   ISSUE_EXECUTION_STATE_STATUSES,
@@ -97,6 +98,7 @@ export const issueExecutionStageSchema = z.object({
 
 export const issueExecutionPolicySchema = z.object({
   mode: z.enum(ISSUE_EXECUTION_POLICY_MODES).optional().default("normal"),
+  followUpMode: z.enum(ISSUE_EXECUTION_FOLLOW_UP_MODES).optional().nullable(),
   commentRequired: z.boolean().optional().default(true),
   stages: z.array(issueExecutionStageSchema).default([]),
 });

@@ -144,6 +144,9 @@ export type IssueRelationType = (typeof ISSUE_RELATION_TYPES)[number];
 export const ISSUE_EXECUTION_POLICY_MODES = ["normal", "auto", "checkpoint"] as const;
 export type IssueExecutionPolicyMode = (typeof ISSUE_EXECUTION_POLICY_MODES)[number];
 
+export const ISSUE_EXECUTION_FOLLOW_UP_MODES = ["non_blocking"] as const;
+export type IssueExecutionFollowUpMode = (typeof ISSUE_EXECUTION_FOLLOW_UP_MODES)[number];
+
 export const ISSUE_EXECUTION_STAGE_TYPES = ["review", "approval"] as const;
 export type IssueExecutionStageType = (typeof ISSUE_EXECUTION_STAGE_TYPES)[number];
 

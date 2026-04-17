@@ -86,6 +86,7 @@ import {
   computeExecutionContextFingerprint,
   reconcileExecutionContextFingerprint,
 } from "./execution-context-fingerprint.js";
+import { readIssueExecutionPolicyFollowUpMode } from "./issue-execution-policy.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -620,6 +621,10 @@ function readIssueExecutionPolicyMode(value: unknown): IssueExecutionPolicyMode 
   return null;
 }
 
+function isNonBlockingFollowUpIssue(value: unknown): boolean {
+  return readIssueExecutionPolicyFollowUpMode(value) === "non_blocking";
+}
+
 export function summarizeHeartbeatRunContextSnapshot(
   contextSnapshot: Record<string, unknown> | null | undefined,
 ): Record<string, unknown> | null {
@@ -699,23 +704,6 @@ function summarizeRunFailureForIssueComment(
   if (errorCode) return ` Latest retry failure: \`${errorCode}\`.`;
   if (summary) return ` Latest retry failure: ${summary}.`;
   return null;
-}
-
-function runLooksLikeSubscriptionExhaustion(
-  run: Pick<typeof heartbeatRuns.$inferSelect, "error" | "errorCode"> | null | undefined,
-) {
-  if (!run) return false;
-  const haystack = [readNonEmptyString(run.error), readNonEmptyString(run.errorCode)]
-    .filter((value): value is string => Boolean(value))
-    .join("\n")
-    .toLowerCase();
-  if (!haystack) return false;
-  return (
-    haystack.includes("hit your limit")
-    || haystack.includes("subscription limit")
-    || haystack.includes("usage cap")
-    || (haystack.includes("resets") && haystack.includes("limit"))
-  );
 }
 
 type TimeoutRecoveryClassification = "clean_timeout" | "dirty_timeout_recovery_required";
@@ -1746,7 +1734,7 @@ export function heartbeatService(db: Db) {
 
   async function listOpenChildIssueIds(companyId: string, parentId: string) {
     return db
-      .select({ id: issues.id })
+      .select({ id: issues.id, executionPolicy: issues.executionPolicy })
       .from(issues)
       .where(
         and(
@@ -1755,7 +1743,7 @@ export function heartbeatService(db: Db) {
           sql`${issues.status} not in ('done', 'cancelled')`,
         ),
       )
-      .then((rows) => rows.map((row) => row.id));
+      .then((rows) => rows.filter((row) => !isNonBlockingFollowUpIssue(row.executionPolicy)).map((row) => row.id));
   }
 
   async function describeIssueExecutionEligibilityFailure(input: {
@@ -3330,27 +3318,6 @@ export function heartbeatService(db: Db) {
       const latestContext = parseObject(latestRun?.contextSnapshot);
       const latestRetryReason = readNonEmptyString(latestContext.retryReason);
       const executionPolicyMode = readIssueExecutionPolicyMode(issue.executionPolicy);
-      const subscriptionExhausted = runLooksLikeSubscriptionExhaustion(latestRun);
-
-      if (subscriptionExhausted) {
-        const failureSummary = summarizeRunFailureForIssueComment(latestRun);
-        const updated = await escalateStrandedAssignedIssue({
-          issue,
-          previousStatus: issue.status === "todo" ? "todo" : "in_progress",
-          latestRun,
-          comment:
-            "Paperclip stopped automatic retries for this assigned issue because the latest run appears to have hit " +
-            `a provider subscription limit.${failureSummary ?? ""} ` +
-            "Moving it to `blocked`; wait for the limit reset or resume manually after credentials are fixed.",
-        });
-        if (updated) {
-          result.escalated += 1;
-          result.issueIds.push(issue.id);
-        } else {
-          result.skipped += 1;
-        }
-        continue;
-      }
 
       if (issue.status === "todo") {
         if (!latestRun || latestRun.status === "succeeded") {

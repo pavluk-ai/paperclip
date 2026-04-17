@@ -32,6 +32,7 @@ import {
   issueExecutionWorkspaceModeForPersistedWorkspace,
   parseProjectExecutionWorkspacePolicy,
 } from "./execution-workspace-policy.js";
+import { readIssueExecutionPolicyFollowUpMode } from "./issue-execution-policy.js";
 import { instanceSettingsService } from "./instance-settings.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { resolveIssueGoalId, resolveNextIssueGoalId } from "./issue-goal-fallback.js";
@@ -134,9 +135,25 @@ function sameRunLock(checkoutRunId: string | null, actorRunId: string | null) {
 
 const TERMINAL_HEARTBEAT_RUN_STATUSES = new Set(["succeeded", "failed", "cancelled", "timed_out"]);
 const ISSUE_LIST_DESCRIPTION_MAX_CHARS = 1200;
+const NON_BLOCKING_FOLLOW_UP_CHILD_ERROR = "NON_BLOCKING_FOLLOW_UP_CANNOT_BE_CHILD";
 
 function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, "\\$&");
+}
+
+function isNonBlockingFollowUpPolicy(value: unknown): boolean {
+  return readIssueExecutionPolicyFollowUpMode(value) === "non_blocking";
+}
+
+function assertFollowUpRelationshipPolicy(input: {
+  executionPolicy: unknown;
+  parentId: string | null | undefined;
+}) {
+  if (isNonBlockingFollowUpPolicy(input.executionPolicy) && input.parentId) {
+    throw unprocessable(NON_BLOCKING_FOLLOW_UP_CHILD_ERROR, {
+      message: "Non-blocking follow-up issues must be standalone and cannot use parentId",
+    });
+  }
 }
 
 async function getProjectDefaultGoalId(
@@ -1407,18 +1424,19 @@ export function issueService(db: Db) {
       }
 
       const children = await db
-        .select({ id: issues.id, status: issues.status })
+        .select({ id: issues.id, status: issues.status, executionPolicy: issues.executionPolicy })
         .from(issues)
         .where(and(eq(issues.companyId, parent.companyId), eq(issues.parentId, parentIssueId)));
-      if (children.length === 0) return null;
-      if (!children.every((child) => child.status === "done" || child.status === "cancelled")) {
+      const blockingChildren = children.filter((child) => !isNonBlockingFollowUpPolicy(child.executionPolicy));
+      if (blockingChildren.length === 0) return null;
+      if (!blockingChildren.every((child) => child.status === "done" || child.status === "cancelled")) {
         return null;
       }
 
       return {
         id: parent.id,
         assigneeAgentId: parent.assigneeAgentId,
-        childIssueIds: children.map((child) => child.id),
+        childIssueIds: blockingChildren.map((child) => child.id),
       };
     },
 
@@ -1441,6 +1459,10 @@ export function issueService(db: Db) {
       if (data.assigneeAgentId && data.assigneeUserId) {
         throw unprocessable("Issue can only have one assignee");
       }
+      assertFollowUpRelationshipPolicy({
+        executionPolicy: data.executionPolicy ?? null,
+        parentId: data.parentId,
+      });
       if (data.assigneeAgentId) {
         await assertAssignableAgent(companyId, data.assigneeAgentId);
       }
@@ -1659,6 +1681,13 @@ export function issueService(db: Db) {
         await assertAssignableUser(existing.companyId, issueData.assigneeUserId);
       }
       const nextProjectId = issueData.projectId !== undefined ? issueData.projectId : existing.projectId;
+      const nextParentId = issueData.parentId !== undefined ? issueData.parentId : existing.parentId;
+      const nextExecutionPolicy =
+        issueData.executionPolicy !== undefined ? issueData.executionPolicy : existing.executionPolicy;
+      assertFollowUpRelationshipPolicy({
+        executionPolicy: nextExecutionPolicy,
+        parentId: nextParentId,
+      });
       const nextProjectWorkspaceId =
         issueData.projectWorkspaceId !== undefined ? issueData.projectWorkspaceId : existing.projectWorkspaceId;
       const nextExecutionWorkspaceId =

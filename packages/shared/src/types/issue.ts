@@ -1,5 +1,6 @@
 import type {
   IssueExecutionDecisionOutcome,
+  IssueExecutionFollowUpMode,
   IssueExecutionPolicyMode,
   IssueExecutionStageType,
   IssueExecutionStateStatus,
@@ -142,6 +143,7 @@ export interface IssueExecutionStage {
 
 export interface IssueExecutionPolicy {
   mode: IssueExecutionPolicyMode;
+  followUpMode?: IssueExecutionFollowUpMode | null;
   commentRequired: boolean;
   stages: IssueExecutionStage[];
 }

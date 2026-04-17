@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
-import type { IssueExecutionDecision, IssueExecutionPolicy, IssueExecutionStage, IssueExecutionStagePrincipal, IssueExecutionState } from "@paperclipai/shared";
+import type {
+  IssueExecutionDecision,
+  IssueExecutionFollowUpMode,
+  IssueExecutionPolicy,
+  IssueExecutionStage,
+  IssueExecutionStagePrincipal,
+  IssueExecutionState,
+} from "@paperclipai/shared";
 import { issueExecutionPolicySchema, issueExecutionStateSchema } from "@paperclipai/shared";
 import { unprocessable } from "../errors.js";
 
@@ -43,6 +50,12 @@ const COMPLETED_STATUS: IssueExecutionState["status"] = "completed";
 const PENDING_STATUS: IssueExecutionState["status"] = "pending";
 const CHANGES_REQUESTED_STATUS: IssueExecutionState["status"] = "changes_requested";
 
+export function readIssueExecutionPolicyFollowUpMode(value: unknown): IssueExecutionFollowUpMode | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const parsed = value as Record<string, unknown>;
+  return parsed.followUpMode === "non_blocking" ? "non_blocking" : null;
+}
+
 export function normalizeIssueExecutionPolicy(input: unknown): IssueExecutionPolicy | null {
   if (input == null) return null;
   const parsed = issueExecutionPolicySchema.safeParse(input);
@@ -50,6 +63,7 @@ export function normalizeIssueExecutionPolicy(input: unknown): IssueExecutionPol
     throw unprocessable("Invalid execution policy", parsed.error.flatten());
   }
   const mode = parsed.data.mode ?? "normal";
+  const followUpMode = parsed.data.followUpMode ?? null;
 
   const stages = parsed.data.stages
     .map((stage) => {
@@ -82,9 +96,10 @@ export function normalizeIssueExecutionPolicy(input: unknown): IssueExecutionPol
     .filter((stage): stage is NonNullable<typeof stage> => stage !== null);
 
   if (stages.length === 0) {
-    if (mode === "checkpoint") {
+    if (mode === "checkpoint" || followUpMode) {
       return {
         mode,
+        followUpMode,
         commentRequired: true,
         stages: [],
       };
@@ -94,6 +109,7 @@ export function normalizeIssueExecutionPolicy(input: unknown): IssueExecutionPol
 
   return {
     mode,
+    followUpMode,
     commentRequired: true,
     stages,
   };

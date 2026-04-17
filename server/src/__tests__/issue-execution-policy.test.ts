@@ -46,6 +46,16 @@ describe("normalizeIssueExecutionPolicy", () => {
   it("preserves checkpoint mode when stages are empty", () => {
     expect(normalizeIssueExecutionPolicy({ mode: "checkpoint", stages: [] })).toEqual({
       mode: "checkpoint",
+      followUpMode: null,
+      commentRequired: true,
+      stages: [],
+    });
+  });
+
+  it("preserves non-blocking follow-up mode even without review stages", () => {
+    expect(normalizeIssueExecutionPolicy({ followUpMode: "non_blocking", stages: [] })).toEqual({
+      mode: "normal",
+      followUpMode: "non_blocking",
       commentRequired: true,
       stages: [],
     });

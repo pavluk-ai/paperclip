@@ -266,7 +266,16 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
     }
-    await db.delete(companies);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await db.delete(companySkills);
+      try {
+        await db.delete(companies);
+        break;
+      } catch (error) {
+        if (attempt === 4) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
   });
 
   afterAll(async () => {
@@ -476,6 +485,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     unresolvedBlocker?: boolean;
     clearedBlockerWake?: boolean;
     openChildCount?: number;
+    nonBlockingOpenChildCount?: number;
   } = {}) {
     const companyId = randomUUID();
     const agentId = randomUUID();
@@ -524,6 +534,27 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
           priority: "medium" as const,
           issueNumber: index + 2,
           identifier: `${issuePrefix}-${index + 2}`,
+        })),
+      );
+    }
+
+    if ((input.nonBlockingOpenChildCount ?? 0) > 0) {
+      await db.insert(issues).values(
+        Array.from({ length: input.nonBlockingOpenChildCount ?? 0 }, (_, index) => ({
+          id: randomUUID(),
+          companyId,
+          parentId: issueId,
+          title: `Non-blocking follow-up ${index + 1}`,
+          status: "todo" as const,
+          priority: "medium" as const,
+          issueNumber: (input.openChildCount ?? 0) + index + 2,
+          identifier: `${issuePrefix}-${(input.openChildCount ?? 0) + index + 2}`,
+          executionPolicy: {
+            mode: "normal" as const,
+            followUpMode: "non_blocking" as const,
+            commentRequired: true,
+            stages: [],
+          },
         })),
       );
     }
@@ -939,6 +970,21 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(issue?.status).toBe("in_progress");
   });
 
+  it("ignores marked non-blocking children when resuming a blocked checkpoint parent", async () => {
+    const { heartbeat, issueId, runId } = await seedExecutableIssueFixture({
+      issueStatus: "blocked",
+      wakeReason: "issue_children_completed",
+      nonBlockingOpenChildCount: 1,
+    });
+
+    const settled = await waitForRunToSettle(heartbeat, runId);
+    expect(settled?.status).toBe("succeeded");
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+
+    const issue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
+    expect(issue?.status).toBe("in_progress");
+  });
+
   it("routes dirty timed-out issue work to recovery review instead of auto-retrying the worker", async () => {
     const { heartbeat, runId, issueId, managerAgentId, workerAgentId } = await seedTimeoutRecoveryFixture({
       dirtyTracked: true,
@@ -1032,8 +1078,34 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     }
   });
 
-  it("blocks assigned work immediately when the latest stranded run hit a subscription limit", async () => {
-    const { issueId, agentId } = await seedStrandedIssueFixture({
+  it("re-enqueues assigned todo work normally when the latest stranded run hit a quota window", async () => {
+    const { agentId, issueId, runId } = await seedStrandedIssueFixture({
+      status: "todo",
+      runStatus: "failed",
+      runErrorCode: "adapter_failed",
+      runError: "You've hit your limit · resets 3pm",
+    });
+    const heartbeat = heartbeatService(db);
+
+    const result = await heartbeat.reconcileStrandedAssignedIssues();
+    expect(result.dispatchRequeued).toBe(1);
+    expect(result.continuationRequeued).toBe(0);
+    expect(result.escalated).toBe(0);
+    expect(result.issueIds).toEqual([issueId]);
+
+    const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId));
+    expect(runs).toHaveLength(2);
+
+    const retryRun = runs.find((row) => row.id !== runId);
+    expect(retryRun?.id).toBeTruthy();
+    expect((retryRun?.contextSnapshot as Record<string, unknown>)?.retryReason).toBe("assignment_recovery");
+    if (retryRun) {
+      await waitForRunToSettle(heartbeat, retryRun.id);
+    }
+  });
+
+  it("re-enqueues assigned in-progress work normally when the latest stranded run hit a quota window", async () => {
+    const { issueId, agentId, runId } = await seedStrandedIssueFixture({
       status: "in_progress",
       runStatus: "failed",
       runErrorCode: "adapter_failed",
@@ -1043,20 +1115,19 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
 
     const result = await heartbeat.reconcileStrandedAssignedIssues();
     expect(result.dispatchRequeued).toBe(0);
-    expect(result.continuationRequeued).toBe(0);
-    expect(result.escalated).toBe(1);
+    expect(result.continuationRequeued).toBe(1);
+    expect(result.escalated).toBe(0);
     expect(result.issueIds).toEqual([issueId]);
 
-    const issue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
-    expect(issue?.status).toBe("blocked");
-
     const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId));
-    expect(runs).toHaveLength(1);
+    expect(runs).toHaveLength(2);
 
-    const comments = await db.select().from(issueComments).where(eq(issueComments.issueId, issueId));
-    expect(comments).toHaveLength(1);
-    expect(comments[0]?.body).toContain("provider subscription limit");
-    expect(comments[0]?.body).toContain("You've hit your limit");
+    const retryRun = runs.find((row) => row.id !== runId);
+    expect(retryRun?.id).toBeTruthy();
+    expect((retryRun?.contextSnapshot as Record<string, unknown>)?.retryReason).toBe("issue_continuation_needed");
+    if (retryRun) {
+      await waitForRunToSettle(heartbeat, retryRun.id);
+    }
   });
 
   it("blocks assigned todo work after the one automatic dispatch recovery was already used", async () => {

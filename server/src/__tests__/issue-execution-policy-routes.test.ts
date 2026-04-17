@@ -177,6 +177,7 @@ describe("issue execution policy routes", () => {
       expect.objectContaining({
         executionPolicy: {
           mode: "checkpoint",
+          followUpMode: null,
           commentRequired: true,
           stages: [],
         },

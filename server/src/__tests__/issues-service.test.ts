@@ -21,6 +21,7 @@ import {
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import { instanceSettingsService } from "../services/instance-settings.ts";
+import { normalizeIssueExecutionPolicy } from "../services/issue-execution-policy.ts";
 import { issueService } from "../services/issues.ts";
 import { buildProjectMentionHref } from "@paperclipai/shared";
 
@@ -1213,6 +1214,128 @@ describeEmbeddedPostgres("issueService blockers and dependency wake readiness", 
       id: parentId,
       assigneeAgentId,
       childIssueIds: [childA, childB],
+    });
+  });
+
+  it("ignores explicitly non-blocking legacy children when deciding whether a parent can wake", async () => {
+    const companyId = randomUUID();
+    const assigneeAgentId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: assigneeAgentId,
+      companyId,
+      name: "CodexCoder",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+
+    const parentId = randomUUID();
+    const blockingChildId = randomUUID();
+    const followUpChildId = randomUUID();
+    await db.insert(issues).values([
+      {
+        id: parentId,
+        companyId,
+        title: "Parent issue",
+        status: "blocked",
+        priority: "medium",
+        assigneeAgentId,
+        executionPolicy: normalizeIssueExecutionPolicy({ mode: "checkpoint", stages: [] }),
+      },
+      {
+        id: blockingChildId,
+        companyId,
+        parentId,
+        title: "Blocking child",
+        status: "done",
+        priority: "medium",
+      },
+      {
+        id: followUpChildId,
+        companyId,
+        parentId,
+        title: "Deferred non-blocking follow-up",
+        status: "todo",
+        priority: "medium",
+        executionPolicy: normalizeIssueExecutionPolicy({ followUpMode: "non_blocking", stages: [] }),
+      },
+    ]);
+
+    expect(await svc.getWakeableParentAfterChildCompletion(parentId)).toEqual({
+      id: parentId,
+      assigneeAgentId,
+      childIssueIds: [blockingChildId],
+    });
+  });
+
+  it("rejects creating a non-blocking follow-up as a child issue", async () => {
+    const companyId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await expect(
+      svc.create(companyId, {
+        title: "Deferred demo gate",
+        status: "todo",
+        priority: "medium",
+        parentId: randomUUID(),
+        executionPolicy: normalizeIssueExecutionPolicy({ followUpMode: "non_blocking", stages: [] }),
+      }),
+    ).rejects.toMatchObject({
+      status: 422,
+      message: "NON_BLOCKING_FOLLOW_UP_CANNOT_BE_CHILD",
+    });
+  });
+
+  it("rejects updating an attached child into a non-blocking follow-up", async () => {
+    const companyId = randomUUID();
+    const parentId = randomUUID();
+    const childId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(issues).values([
+      {
+        id: parentId,
+        companyId,
+        title: "Parent issue",
+        status: "todo",
+        priority: "medium",
+      },
+      {
+        id: childId,
+        companyId,
+        parentId,
+        title: "Legacy attached follow-up",
+        status: "todo",
+        priority: "medium",
+      },
+    ]);
+
+    await expect(
+      svc.update(childId, {
+        executionPolicy: normalizeIssueExecutionPolicy({ followUpMode: "non_blocking", stages: [] }),
+      }),
+    ).rejects.toMatchObject({
+      status: 422,
+      message: "NON_BLOCKING_FOLLOW_UP_CANNOT_BE_CHILD",
     });
   });
 });
