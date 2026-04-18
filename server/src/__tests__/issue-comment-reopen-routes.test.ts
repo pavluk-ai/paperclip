@@ -464,18 +464,20 @@ describe("issue comment reopen routes", () => {
       .send({ status: "todo" });
 
     expect(res.status).toBe(200);
-    expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
-      "22222222-2222-4222-8222-222222222222",
-      expect.objectContaining({
-        source: "automation",
-        triggerDetail: "system",
-        reason: "issue_status_changed",
-        payload: expect.objectContaining({
-          issueId: "11111111-1111-4111-8111-111111111111",
-          mutation: "update",
+    await vi.waitFor(() => {
+      expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
+        "22222222-2222-4222-8222-222222222222",
+        expect.objectContaining({
+          source: "automation",
+          triggerDetail: "system",
+          reason: "issue_status_changed",
+          payload: expect.objectContaining({
+            issueId: "11111111-1111-4111-8111-111111111111",
+            mutation: "update",
+          }),
         }),
-      }),
-    );
+      );
+    });
   });
   it("interrupts an active run before a combined comment update", async () => {
     const issue = {

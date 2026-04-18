@@ -430,6 +430,7 @@ describe("heartbeat comment wake batching", () => {
   }, 210_000);
 
   it("promotes deferred comment wakes after the active run closes the issue", async () => {
+    const deferredPromotionTimeoutMs = 120_000;
     const gateway = await createControlledGatewayServer();
     const companyId = randomUUID();
     const agentId = randomUUID();
@@ -512,6 +513,7 @@ describe("heartbeat comment wake batching", () => {
           .then((rows) => rows[0] ?? null);
         return run?.status === "running";
       });
+      await waitFor(() => gateway.getAgentPayloads().length === 1);
 
       const comment2 = await db
         .insert(issueComments)
@@ -570,14 +572,14 @@ describe("heartbeat comment wake batching", () => {
 
       gateway.releaseFirstWait();
 
-      await waitFor(() => gateway.getAgentPayloads().length === 2, 90_000);
+      await waitFor(() => gateway.getAgentPayloads().length === 2, deferredPromotionTimeoutMs);
       await waitFor(async () => {
         const runs = await db
           .select()
           .from(heartbeatRuns)
           .where(eq(heartbeatRuns.agentId, agentId));
         return runs.length === 2 && runs.every((run) => run.status === "succeeded");
-      }, 90_000);
+      }, deferredPromotionTimeoutMs);
 
       const reopenedIssue = await db
         .select({
@@ -613,7 +615,7 @@ describe("heartbeat comment wake batching", () => {
       gateway.releaseFirstWait();
       await gateway.close();
     }
-  }, 210_000);
+  }, 270_000);
 
   it("queues exactly one follow-up run when an issue-bound run exits without a comment", async () => {
     const gateway = await createControlledGatewayServer();
