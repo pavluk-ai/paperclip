@@ -31,6 +31,25 @@ const mockRoutineService = vi.hoisted(() => ({
   syncRunStatusForIssue: vi.fn(),
 }));
 const mockLogActivity = vi.hoisted(() => vi.fn());
+const mockIssueReferenceService = vi.hoisted(() => ({
+  syncIssue: vi.fn(async () => undefined),
+  syncComment: vi.fn(async () => undefined),
+  syncDocument: vi.fn(async () => undefined),
+  deleteDocumentSource: vi.fn(async () => undefined),
+  listIssueReferenceSummary: vi.fn(async () => ({
+    outbound: [],
+    inbound: [],
+  })),
+  emptySummary: vi.fn(() => ({
+    outbound: [],
+    inbound: [],
+  })),
+  diffIssueReferenceSummary: vi.fn(() => ({
+    addedReferencedIssues: [],
+    removedReferencedIssues: [],
+    currentReferencedIssues: [],
+  })),
+}));
 
 vi.mock("../services/index.js", () => ({
   accessService: () => mockAccessService,
@@ -45,6 +64,7 @@ vi.mock("../services/index.js", () => ({
   feedbackService: () => ({}),
   workProductService: () => mockWorkProductService,
   documentService: () => mockDocumentService,
+  issueReferenceService: () => mockIssueReferenceService,
   routineService: () => mockRoutineService,
   logActivity: mockLogActivity,
 }));

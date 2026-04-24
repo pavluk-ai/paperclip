@@ -5,12 +5,18 @@ import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Agent } from "@paperclipai/shared";
 import {
   IssueChatThread,
   canStopIssueChatRun,
   resolveAssistantMessageFoldedState,
   resolveIssueChatHumanAuthor,
 } from "./IssueChatThread";
+import type {
+  AskUserQuestionsInteraction,
+  RequestConfirmationInteraction,
+  SuggestTasksInteraction,
+} from "../lib/issue-thread-interactions";
 
 const { markdownEditorFocusMock } = vi.hoisted(() => ({
   markdownEditorFocusMock: vi.fn(),
@@ -18,10 +24,6 @@ const { markdownEditorFocusMock } = vi.hoisted(() => ({
 
 const { appendMock } = vi.hoisted(() => ({
   appendMock: vi.fn(async () => undefined),
-}));
-
-const { threadMessagesMock } = vi.hoisted(() => ({
-  threadMessagesMock: vi.fn(() => <div data-testid="thread-messages" />),
 }));
 
 const {
@@ -36,31 +38,7 @@ const {
 
 vi.mock("@assistant-ui/react", () => ({
   AssistantRuntimeProvider: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  ThreadPrimitive: {
-    Root: ({ children, className }: { children: ReactNode; className?: string }) => (
-      <div data-testid="thread-root" className={className}>{children}</div>
-    ),
-    Viewport: ({ children, className }: { children: ReactNode; className?: string }) => (
-      <div data-testid="thread-viewport" className={className}>{children}</div>
-    ),
-    Empty: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-    Messages: () => threadMessagesMock(),
-  },
-  MessagePrimitive: {
-    Root: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-    Content: () => null,
-    Parts: () => null,
-  },
   useAui: () => ({ thread: () => ({ append: appendMock }) }),
-  useAuiState: () => false,
-  useMessage: () => ({
-    id: "message",
-    role: "assistant",
-    createdAt: new Date("2026-04-06T12:00:00.000Z"),
-    content: [],
-    metadata: { custom: {} },
-    status: { type: "complete" },
-  }),
 }));
 
 vi.mock("./transcript/useLiveRunTranscripts", () => ({
@@ -127,12 +105,36 @@ vi.mock("./OutputFeedbackButtons", () => ({
   OutputFeedbackButtons: () => null,
 }));
 
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
+
 vi.mock("./AgentIconPicker", () => ({
   AgentIcon: () => null,
 }));
 
 vi.mock("./StatusBadge", () => ({
   StatusBadge: ({ status }: { status: string }) => <span>{status}</span>,
+}));
+
+vi.mock("./IssueLinkQuicklook", () => ({
+  IssueLinkQuicklook: ({
+    children,
+    to,
+    issuePathId,
+    className,
+  }: {
+    children: ReactNode;
+    to: string;
+    issuePathId: string;
+    className?: string;
+  }) => (
+    <a href={to} data-issue-path-id={issuePathId} className={className}>
+      {children}
+    </a>
+  ),
 }));
 
 vi.mock("../hooks/usePaperclipIssueRuntime", () => ({
@@ -142,6 +144,111 @@ vi.mock("../hooks/usePaperclipIssueRuntime", () => ({
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
+function createSuggestedTasksInteraction(
+  overrides: Partial<SuggestTasksInteraction> = {},
+): SuggestTasksInteraction {
+  return {
+    id: "interaction-suggest-1",
+    companyId: "company-1",
+    issueId: "issue-1",
+    kind: "suggest_tasks",
+    title: "Suggested follow-up work",
+    summary: "Preview the next issue tree before accepting it.",
+    status: "pending",
+    continuationPolicy: "wake_assignee",
+    createdByAgentId: "agent-1",
+    createdByUserId: null,
+    resolvedByAgentId: null,
+    resolvedByUserId: null,
+    createdAt: new Date("2026-04-06T12:02:00.000Z"),
+    updatedAt: new Date("2026-04-06T12:02:00.000Z"),
+    resolvedAt: null,
+    payload: {
+      version: 1,
+      tasks: [
+        {
+          clientKey: "task-1",
+          title: "Prototype the card",
+        },
+      ],
+    },
+    result: null,
+    ...overrides,
+  };
+}
+
+function createQuestionInteraction(
+  overrides: Partial<AskUserQuestionsInteraction> = {},
+): AskUserQuestionsInteraction {
+  return {
+    id: "interaction-question-1",
+    companyId: "company-1",
+    issueId: "issue-1",
+    kind: "ask_user_questions",
+    title: "Clarify the phase",
+    status: "pending",
+    continuationPolicy: "wake_assignee",
+    createdByAgentId: "agent-1",
+    createdByUserId: null,
+    resolvedByAgentId: null,
+    resolvedByUserId: null,
+    createdAt: new Date("2026-04-06T12:03:00.000Z"),
+    updatedAt: new Date("2026-04-06T12:03:00.000Z"),
+    resolvedAt: null,
+    payload: {
+      version: 1,
+      submitLabel: "Submit answers",
+      questions: [
+        {
+          id: "scope",
+          prompt: "Pick one scope",
+          selectionMode: "single",
+          required: true,
+          options: [
+            { id: "phase-1", label: "Phase 1" },
+            { id: "phase-2", label: "Phase 2" },
+          ],
+        },
+      ],
+    },
+    result: null,
+    ...overrides,
+  };
+}
+
+function createExpiredRequestConfirmationInteraction(
+  overrides: Partial<RequestConfirmationInteraction> = {},
+): RequestConfirmationInteraction {
+  return {
+    id: "interaction-confirmation-expired",
+    companyId: "company-1",
+    issueId: "issue-1",
+    kind: "request_confirmation",
+    title: "Approve the plan",
+    status: "expired",
+    continuationPolicy: "wake_assignee_on_accept",
+    createdByAgentId: "agent-1",
+    createdByUserId: null,
+    resolvedByAgentId: null,
+    resolvedByUserId: "user-1",
+    createdAt: new Date("2026-04-06T12:04:00.000Z"),
+    updatedAt: new Date("2026-04-06T12:05:00.000Z"),
+    resolvedAt: new Date("2026-04-06T12:05:00.000Z"),
+    payload: {
+      version: 1,
+      prompt: "Approve the plan and let the assignee start implementation?",
+      acceptLabel: "Approve plan",
+      rejectLabel: "Request revisions",
+    },
+    result: {
+      version: 1,
+      outcome: "superseded_by_comment",
+      commentId: "comment-1",
+    },
+    ...overrides,
+  };
+}
+
 describe("IssueChatThread", () => {
   let container: HTMLDivElement;
 
@@ -149,7 +256,6 @@ describe("IssueChatThread", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     localStorage.clear();
-    threadMessagesMock.mockImplementation(() => <div data-testid="thread-messages" />);
   });
 
   afterEach(() => {
@@ -157,7 +263,6 @@ describe("IssueChatThread", () => {
     vi.useRealTimers();
     appendMock.mockReset();
     markdownEditorFocusMock.mockReset();
-    threadMessagesMock.mockReset();
     captureComposerViewportSnapshotMock.mockClear();
     restoreComposerViewportSnapshotMock.mockClear();
     shouldPreserveComposerViewportMock.mockClear();
@@ -189,6 +294,83 @@ describe("IssueChatThread", () => {
     expect(viewport).not.toBeNull();
     expect(viewport?.className).not.toContain("overflow-y-auto");
     expect(viewport?.className).not.toContain("max-h-[70vh]");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("shows unresolved blocker context above the composer", () => {
+    const root = createRoot(container);
+
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <IssueChatThread
+            comments={[]}
+            linkedRuns={[]}
+            timelineEvents={[]}
+            liveRuns={[]}
+            issueStatus="todo"
+            blockedBy={[
+              {
+                id: "blocker-1",
+                identifier: "PAP-1723",
+                title: "QA the install flow",
+                status: "blocked",
+                priority: "medium",
+                assigneeAgentId: "agent-1",
+                assigneeUserId: null,
+              },
+            ]}
+            onAdd={async () => {}}
+            enableLiveTranscriptPolling={false}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    expect(container.textContent).toContain("Work on this issue is blocked by the linked issue");
+    expect(container.textContent).toContain("Comments still wake the assignee for questions or triage");
+    expect(container.textContent).toContain("PAP-1723");
+    expect(container.textContent).toContain("QA the install flow");
+    expect(container.querySelector('[data-issue-path-id="PAP-1723"]')).not.toBeNull();
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("shows paused assigned agent context above the composer", () => {
+    const root = createRoot(container);
+    const pausedAgent = {
+      id: "agent-1",
+      companyId: "company-1",
+      name: "CodexCoder",
+      status: "paused",
+      pauseReason: "manual",
+    } as Agent;
+
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <IssueChatThread
+            comments={[]}
+            linkedRuns={[]}
+            timelineEvents={[]}
+            liveRuns={[]}
+            agentMap={new Map([["agent-1", pausedAgent]])}
+            currentAssigneeValue="agent:agent-1"
+            onAdd={async () => {}}
+            enableLiveTranscriptPolling={false}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    expect(container.textContent).toContain("CodexCoder is paused");
+    expect(container.textContent).toContain("New runs will not start until the agent is resumed");
+    expect(container.textContent).toContain("It was paused manually");
 
     act(() => {
       root.unmount();
@@ -228,12 +410,211 @@ describe("IssueChatThread", () => {
     });
   });
 
-  it("falls back to a safe transcript warning when assistant-ui throws during message rendering", () => {
+  it("invokes the accept callback for pending suggested-task interactions", async () => {
     const root = createRoot(container);
-    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    threadMessagesMock.mockImplementation(() => {
-      throw new Error("tapClientLookup: Index 8 out of bounds (length: 8)");
+    const onAcceptInteraction = vi.fn(async () => undefined);
+
+    await act(async () => {
+      root.render(
+        <MemoryRouter>
+          <IssueChatThread
+            comments={[]}
+            interactions={[createSuggestedTasksInteraction()]}
+            linkedRuns={[]}
+            timelineEvents={[]}
+            liveRuns={[]}
+            onAdd={async () => {}}
+            onAcceptInteraction={onAcceptInteraction}
+            showComposer={false}
+            enableLiveTranscriptPolling={false}
+          />
+        </MemoryRouter>,
+      );
     });
+
+    const acceptButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Accept drafts"),
+    );
+    expect(acceptButton).toBeTruthy();
+
+    await act(async () => {
+      acceptButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(onAcceptInteraction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "interaction-suggest-1",
+        kind: "suggest_tasks",
+      }),
+      ["task-1"],
+    );
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("submits only the selected draft subtree when tasks are manually pruned", async () => {
+    const root = createRoot(container);
+    const onAcceptInteraction = vi.fn(async () => undefined);
+
+    await act(async () => {
+      root.render(
+        <MemoryRouter>
+          <IssueChatThread
+            comments={[]}
+            interactions={[createSuggestedTasksInteraction({
+              payload: {
+                version: 1,
+                tasks: [
+                  {
+                    clientKey: "root",
+                    title: "Root task",
+                  },
+                  {
+                    clientKey: "child",
+                    parentClientKey: "root",
+                    title: "Child task",
+                  },
+                ],
+              },
+            })]}
+            linkedRuns={[]}
+            timelineEvents={[]}
+            liveRuns={[]}
+            onAdd={async () => {}}
+            onAcceptInteraction={onAcceptInteraction}
+            showComposer={false}
+            enableLiveTranscriptPolling={false}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    const childCheckbox = container.querySelector('[aria-label="Include Child task"]');
+    expect(childCheckbox).toBeTruthy();
+
+    await act(async () => {
+      childCheckbox?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    const acceptButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Accept selected drafts"),
+    );
+    expect(acceptButton).toBeTruthy();
+    await act(async () => {
+      acceptButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(onAcceptInteraction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "interaction-suggest-1",
+        kind: "suggest_tasks",
+      }),
+      ["root"],
+    );
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("submits selected answers for pending question interactions", async () => {
+    const root = createRoot(container);
+    const onSubmitInteractionAnswers = vi.fn(async () => undefined);
+
+    await act(async () => {
+      root.render(
+        <MemoryRouter>
+          <IssueChatThread
+            comments={[]}
+            interactions={[createQuestionInteraction()]}
+            linkedRuns={[]}
+            timelineEvents={[]}
+            liveRuns={[]}
+            onAdd={async () => {}}
+            onSubmitInteractionAnswers={onSubmitInteractionAnswers}
+            showComposer={false}
+            enableLiveTranscriptPolling={false}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    const optionButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Phase 1"),
+    );
+    const submitButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Submit answers"),
+    );
+    expect(optionButton).toBeTruthy();
+    expect(submitButton).toBeTruthy();
+
+    await act(async () => {
+      optionButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await act(async () => {
+      submitButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(onSubmitInteractionAnswers).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "interaction-question-1",
+        kind: "ask_user_questions",
+      }),
+      [{ questionId: "scope", optionIds: ["phase-1"] }],
+    );
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("folds expired request confirmations into an activity row by default", async () => {
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <MemoryRouter>
+          <IssueChatThread
+            comments={[]}
+            interactions={[createExpiredRequestConfirmationInteraction()]}
+            linkedRuns={[]}
+            timelineEvents={[]}
+            liveRuns={[]}
+            onAdd={async () => {}}
+            currentUserId="user-1"
+            userLabelMap={new Map([["user-1", "Dotta"]])}
+            showComposer={false}
+            enableLiveTranscriptPolling={false}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    expect(container.textContent).toContain("Dotta");
+    expect(container.textContent).toContain("updated this task");
+    expect(container.textContent).toContain("Expired confirmation");
+    expect(container.textContent).not.toContain("Approve the plan");
+
+    const toggleButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Expired confirmation"),
+    );
+    expect(toggleButton).toBeTruthy();
+
+    await act(async () => {
+      toggleButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(container.textContent).toContain("Approve the plan");
+    expect(container.textContent).toContain("Confirmation expired after comment");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("renders the transcript directly from stable Paperclip messages", () => {
+    const root = createRoot(container);
 
     act(() => {
       root.render(
@@ -260,11 +641,76 @@ describe("IssueChatThread", () => {
       );
     });
 
-    expect(container.textContent).toContain("Chat renderer hit an internal state error.");
     expect(container.textContent).toContain("Agent summary");
-    expect(consoleErrorSpy).toHaveBeenCalled();
+    expect(container.textContent).not.toContain("Chat renderer hit an internal state error.");
 
-    consoleErrorSpy.mockRestore();
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("shows deferred wake badge only for hold-deferred queued comments", () => {
+    const root = createRoot(container);
+
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <IssueChatThread
+            comments={[{
+              id: "comment-hold",
+              companyId: "company-1",
+              issueId: "issue-1",
+              authorAgentId: null,
+              authorUserId: "user-1",
+              body: "Need a quick update",
+              queueState: "queued",
+              queueReason: "hold",
+              createdAt: new Date("2026-04-06T12:00:00.000Z"),
+              updatedAt: new Date("2026-04-06T12:00:00.000Z"),
+            }]}
+            linkedRuns={[]}
+            timelineEvents={[]}
+            liveRuns={[]}
+            onAdd={async () => {}}
+            showComposer={false}
+            enableLiveTranscriptPolling={false}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    expect(container.textContent).toContain("Deferred wake");
+
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <IssueChatThread
+            comments={[{
+              id: "comment-active-run",
+              companyId: "company-1",
+              issueId: "issue-1",
+              authorAgentId: null,
+              authorUserId: "user-1",
+              body: "Queue behind active run",
+              queueState: "queued",
+              queueReason: "active_run",
+              createdAt: new Date("2026-04-06T12:01:00.000Z"),
+              updatedAt: new Date("2026-04-06T12:01:00.000Z"),
+            }]}
+            linkedRuns={[]}
+            timelineEvents={[]}
+            liveRuns={[]}
+            onAdd={async () => {}}
+            showComposer={false}
+            enableLiveTranscriptPolling={false}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    expect(container.textContent).toContain("Queued");
+    expect(container.textContent).not.toContain("Deferred wake");
+
     act(() => {
       root.unmount();
     });
@@ -338,7 +784,7 @@ describe("IssueChatThread", () => {
     });
   });
 
-  it("keeps the composer inline with bottom breathing room and a capped editor height", () => {
+  it("keeps the composer floating with a capped editor height", () => {
     const root = createRoot(container);
 
     act(() => {
@@ -356,15 +802,85 @@ describe("IssueChatThread", () => {
       );
     });
 
+    const dock = container.querySelector('[data-testid="issue-chat-composer-dock"]') as HTMLDivElement | null;
+    expect(dock).not.toBeNull();
+    expect(dock?.className).toContain("sticky");
+    expect(dock?.className).toContain("bottom-[calc(env(safe-area-inset-bottom)+20px)]");
+    expect(dock?.className).toContain("z-20");
+
     const composer = container.querySelector('[data-testid="issue-chat-composer"]') as HTMLDivElement | null;
     expect(composer).not.toBeNull();
-    expect(composer?.className).not.toContain("sticky");
-    expect(composer?.className).not.toContain("bottom-0");
-    expect(composer?.className).toContain("pb-[calc(env(safe-area-inset-bottom)+1.5rem)]");
+    expect(composer?.className).toContain("rounded-md");
+    expect(composer?.className).not.toContain("rounded-lg");
+    expect(composer?.className).toContain("p-[15px]");
 
     const editor = container.querySelector('textarea[aria-label="Issue chat editor"]') as HTMLTextAreaElement | null;
     expect(editor?.dataset.contentClassName).toContain("max-h-[28dvh]");
     expect(editor?.dataset.contentClassName).toContain("overflow-y-auto");
+    expect(editor?.dataset.contentClassName).not.toContain("min-h-[72px]");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("renders the bottom spacer with zero height until the user has submitted", () => {
+    const root = createRoot(container);
+
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <IssueChatThread
+            comments={[{
+              id: "comment-spacer-1",
+              companyId: "company-1",
+              issueId: "issue-1",
+              authorAgentId: null,
+              authorUserId: "user-1",
+              body: "hello",
+              createdAt: new Date("2026-04-22T12:00:00.000Z"),
+              updatedAt: new Date("2026-04-22T12:00:00.000Z"),
+            }]}
+            linkedRuns={[]}
+            timelineEvents={[]}
+            liveRuns={[]}
+            onAdd={async () => {}}
+            enableLiveTranscriptPolling={false}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    const spacer = container.querySelector('[data-testid="issue-chat-bottom-spacer"]') as HTMLDivElement | null;
+    expect(spacer).not.toBeNull();
+    expect(spacer?.style.height).toBe("0px");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("omits the bottom spacer when the composer is hidden", () => {
+    const root = createRoot(container);
+
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <IssueChatThread
+            comments={[]}
+            linkedRuns={[]}
+            timelineEvents={[]}
+            liveRuns={[]}
+            onAdd={async () => {}}
+            showComposer={false}
+            enableLiveTranscriptPolling={false}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    const spacer = container.querySelector('[data-testid="issue-chat-bottom-spacer"]');
+    expect(spacer).toBeNull();
 
     act(() => {
       root.unmount();

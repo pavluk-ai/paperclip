@@ -29,6 +29,25 @@ const mockAgentService = vi.hoisted(() => ({
 
 const mockLogActivity = vi.hoisted(() => vi.fn(async () => undefined));
 const mockSyncRunStatusForIssue = vi.hoisted(() => vi.fn(async () => undefined));
+const mockIssueReferenceService = vi.hoisted(() => ({
+  syncIssue: vi.fn(async () => undefined),
+  syncComment: vi.fn(async () => undefined),
+  syncDocument: vi.fn(async () => undefined),
+  deleteDocumentSource: vi.fn(async () => undefined),
+  listIssueReferenceSummary: vi.fn(async () => ({
+    outbound: [],
+    inbound: [],
+  })),
+  emptySummary: vi.fn(() => ({
+    outbound: [],
+    inbound: [],
+  })),
+  diffIssueReferenceSummary: vi.fn(() => ({
+    addedReferencedIssues: [],
+    removedReferencedIssues: [],
+    currentReferencedIssues: [],
+  })),
+}));
 const currentActor = vi.hoisted(() => ({
   actor: {
     type: "board" as const,
@@ -57,6 +76,7 @@ vi.mock("../services/index.js", () => ({
   instanceSettingsService: () => ({}),
   issueApprovalService: () => ({}),
   issueService: () => mockIssueService,
+  issueReferenceService: () => mockIssueReferenceService,
   logActivity: mockLogActivity,
   projectService: () => ({}),
   routineService: () => ({

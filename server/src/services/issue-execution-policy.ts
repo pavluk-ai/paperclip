@@ -38,6 +38,7 @@ type TransitionInput = {
   requestedAssigneePatch: RequestedAssigneePatch;
   actor: ActorLike;
   commentBody?: string | null;
+  reviewRequest?: IssueExecutionState["reviewRequest"] | null;
 };
 
 type TransitionResult = {
@@ -194,6 +195,7 @@ function buildCompletedState(previous: IssueExecutionState | null, currentStage:
     currentStageType: null,
     currentParticipant: null,
     returnAssignee: previous?.returnAssignee ?? null,
+    reviewRequest: null,
     completedStageIds,
     lastDecisionId: previous?.lastDecisionId ?? null,
     lastDecisionOutcome: "approved",
@@ -212,6 +214,7 @@ function buildStateWithCompletedStages(input: {
     currentStageType: input.previous?.currentStageType ?? null,
     currentParticipant: input.previous?.currentParticipant ?? null,
     returnAssignee: input.previous?.returnAssignee ?? input.returnAssignee,
+    reviewRequest: input.previous?.reviewRequest ?? null,
     completedStageIds: input.completedStageIds,
     lastDecisionId: input.previous?.lastDecisionId ?? null,
     lastDecisionOutcome: input.previous?.lastDecisionOutcome ?? null,
@@ -230,6 +233,7 @@ function buildSkippedStageCompletedState(input: {
     currentStageType: null,
     currentParticipant: null,
     returnAssignee: input.previous?.returnAssignee ?? input.returnAssignee,
+    reviewRequest: null,
     completedStageIds: input.completedStageIds,
     lastDecisionId: input.previous?.lastDecisionId ?? null,
     lastDecisionOutcome: input.previous?.lastDecisionOutcome ?? null,
@@ -242,6 +246,7 @@ function buildPendingState(input: {
   stageIndex: number;
   participant: IssueExecutionStagePrincipal;
   returnAssignee: IssueExecutionStagePrincipal | null;
+  reviewRequest?: IssueExecutionState["reviewRequest"] | null;
 }): IssueExecutionState {
   return {
     status: PENDING_STATUS,
@@ -250,6 +255,7 @@ function buildPendingState(input: {
     currentStageType: input.stage.type,
     currentParticipant: input.participant,
     returnAssignee: input.returnAssignee,
+    reviewRequest: input.reviewRequest ?? null,
     completedStageIds: input.previous?.completedStageIds ?? [],
     lastDecisionId: input.previous?.lastDecisionId ?? null,
     lastDecisionOutcome: input.previous?.lastDecisionOutcome ?? null,
@@ -262,6 +268,7 @@ function buildChangesRequestedState(previous: IssueExecutionState, currentStage:
     status: CHANGES_REQUESTED_STATUS,
     currentStageId: currentStage.id,
     currentStageType: currentStage.type,
+    reviewRequest: null,
     lastDecisionOutcome: "changes_requested",
   };
 }
@@ -273,6 +280,7 @@ function buildPendingStagePatch(input: {
   stage: IssueExecutionStage;
   participant: IssueExecutionStagePrincipal;
   returnAssignee: IssueExecutionStagePrincipal | null;
+  reviewRequest?: IssueExecutionState["reviewRequest"] | null;
 }) {
   input.patch.status = "in_review";
   Object.assign(input.patch, patchForPrincipal(input.participant));
@@ -282,6 +290,7 @@ function buildPendingStagePatch(input: {
     stageIndex: input.policy.stages.findIndex((candidate) => candidate.id === input.stage.id),
     participant: input.participant,
     returnAssignee: input.returnAssignee,
+    reviewRequest: input.reviewRequest,
   });
 }
 
@@ -321,6 +330,9 @@ export function applyIssueExecutionPolicyTransition(input: TransitionInput): Tra
   const currentStage = input.policy ? findStageById(input.policy, existingState?.currentStageId) : null;
   const requestedStatus = input.requestedStatus;
   const activeStage = currentStage && existingState?.status === PENDING_STATUS ? currentStage : null;
+  const effectiveReviewRequest = input.reviewRequest === undefined
+    ? existingState?.reviewRequest ?? null
+    : input.reviewRequest;
 
   if (!input.policy) {
     if (existingState) {
@@ -385,6 +397,7 @@ export function applyIssueExecutionPolicyTransition(input: TransitionInput): Tra
         stage: activeStage,
         participant,
         returnAssignee: existingState?.returnAssignee ?? currentAssignee ?? actor,
+        reviewRequest: effectiveReviewRequest,
       });
       return {
         patch,
@@ -431,6 +444,7 @@ export function applyIssueExecutionPolicyTransition(input: TransitionInput): Tra
           stage: nextStage,
           participant,
           returnAssignee: existingState?.returnAssignee ?? currentAssignee ?? actor,
+          reviewRequest: input.reviewRequest ?? null,
         });
         return {
           patch,
@@ -487,6 +501,7 @@ export function applyIssueExecutionPolicyTransition(input: TransitionInput): Tra
         stage: activeStage,
         participant: currentParticipant,
         returnAssignee: existingState?.returnAssignee ?? currentAssignee ?? actor,
+        reviewRequest: effectiveReviewRequest,
       });
       return {
         patch,
@@ -564,6 +579,7 @@ export function applyIssueExecutionPolicyTransition(input: TransitionInput): Tra
     stage: pendingStage,
     participant,
     returnAssignee,
+    reviewRequest: input.reviewRequest ?? null,
   });
   return {
     patch,

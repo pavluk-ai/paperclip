@@ -234,10 +234,6 @@ describe("shouldResetTaskSessionForWake", () => {
     expect(shouldResetTaskSessionForWake({ wakeReason: "issue_assigned" })).toBe(true);
   });
 
-  it("resets session context on timeout recovery wake", () => {
-    expect(shouldResetTaskSessionForWake({ wakeReason: "issue_timeout_recovery" })).toBe(true);
-  });
-
   it("resets session context on execution review wakes", () => {
     expect(shouldResetTaskSessionForWake({ wakeReason: "execution_review_requested" })).toBe(true);
   });
