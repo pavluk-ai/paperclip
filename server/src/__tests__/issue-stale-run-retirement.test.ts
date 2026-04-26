@@ -147,24 +147,20 @@ describe("issue stale execution retirement", () => {
     mockHeartbeatService.cancelRun.mockResolvedValue(null);
   });
 
-  it("cancels a stale foreign run when the issue is closed", async () => {
+  it("does not cancel a stale foreign run when the issue is marked done", async () => {
     mockIssueService.getById.mockResolvedValue(makeIssue());
     mockIssueService.update.mockResolvedValue({
       ...makeIssue(),
       status: "done",
     });
     mockHeartbeatService.getRun.mockResolvedValue(makeRun());
-    mockHeartbeatService.cancelRun.mockResolvedValue({
-      ...makeRun(),
-      status: "cancelled",
-    });
 
     const res = await request(createApp())
       .patch("/api/issues/11111111-1111-4111-8111-111111111111")
       .send({ status: "done" });
 
     expect(res.status).toBe(200);
-    expect(mockHeartbeatService.cancelRun).toHaveBeenCalledWith("33333333-3333-4333-8333-333333333333");
+    expect(mockHeartbeatService.cancelRun).not.toHaveBeenCalled();
   });
 
   it("cancels a stale foreign run when the issue is cancelled", async () => {

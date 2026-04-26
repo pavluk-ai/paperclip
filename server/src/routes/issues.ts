@@ -898,7 +898,7 @@ export function issueRoutes(
     if (actorRunId && candidateRun.id === actorRunId) return false;
 
     const issueClosedOrDormant =
-      updatedIssue.status === "done" || updatedIssue.status === "cancelled" || updatedIssue.status === "backlog";
+      updatedIssue.status === "cancelled" || updatedIssue.status === "backlog";
     const assigneeMovedAway = updatedIssue.assigneeAgentId !== candidateRun.agentId;
 
     return issueClosedOrDormant || assigneeMovedAway;
