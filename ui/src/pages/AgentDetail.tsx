@@ -20,7 +20,7 @@ import { usePanel } from "../context/PanelContext";
 import { useSidebar } from "../context/SidebarContext";
 import { useCompany } from "../context/CompanyContext";
 import { useToastActions } from "../context/ToastContext";
-import { useDialog } from "../context/DialogContext";
+import { useDialogActions } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { AgentConfigForm } from "../components/AgentConfigForm";
@@ -28,6 +28,7 @@ import { PageTabBar } from "../components/PageTabBar";
 import { adapterLabels, roleLabels, help } from "../components/agent-config-primitives";
 import { ToggleSwitch } from "@/components/ui/toggle-switch";
 import { useAdapterCapabilities } from "@/adapters/use-adapter-capabilities";
+import { redactCommandText as redactCommandSecretText } from "@paperclipai/adapter-utils";
 import { MarkdownEditor } from "../components/MarkdownEditor";
 import { assetsApi } from "../api/assets";
 import { getUIAdapter, buildTranscript, onAdapterChange } from "../adapters";
@@ -40,11 +41,15 @@ import { Identity } from "../components/Identity";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { RunButton, PauseResumeButton } from "../components/AgentActionButtons";
 import { BudgetPolicyCard } from "../components/BudgetPolicyCard";
-import { PackageFileTree, buildFileTree } from "../components/PackageFileTree";
+import { FileTree, buildFileTree } from "../components/FileTree";
 import { ScrollToBottom } from "../components/ScrollToBottom";
+import { SourceResolvedFoldCallout } from "../components/SourceResolvedFoldCallout";
+import { SourceResolvedFoldBadge } from "../components/SourceResolvedFoldBadge";
+import { readSourceResolvedWatchdogFold } from "../lib/source-resolved-watchdog-fold";
 import { formatCents, formatDate, relativeTime, formatTokens, visibleRunCostUsd } from "../lib/utils";
 import { cn } from "../lib/utils";
 import { describeRunRetryState } from "../lib/runRetryState";
+import { buildDuplicateAgentPayload, duplicateAgentName, type DuplicateInstructionsBundle } from "../lib/duplicate-agent-payload";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs } from "@/components/ui/tabs";
@@ -84,6 +89,8 @@ import {
   isUuidLike,
   type Agent,
   type AgentRuntimeState,
+  type AgentInstructionsBundle,
+  type AgentInstructionsFileSummary,
   type AgentSkillEntry,
   type AgentSkillSnapshot,
   type AgentDetail as AgentDetailRecord,
@@ -102,6 +109,34 @@ import {
 } from "../lib/agent-skills-state";
 import { isDirtyRunTimeoutRecovery, readRunTimeoutRecovery } from "../lib/run-timeout-recovery";
 
+async function loadDuplicateInstructionsBundle(
+  agentId: string,
+  companyId?: string,
+): Promise<DuplicateInstructionsBundle | null> {
+  const bundle = await agentsApi.instructionsBundle(agentId, companyId);
+  const files: Record<string, string> = {};
+
+  for (const summary of bundle.files) {
+    const path = duplicateInstructionFilePath(bundle, summary);
+    if (!path) continue;
+    const file = await agentsApi.instructionsFile(agentId, summary.path, companyId);
+    files[path] = file.content;
+  }
+
+  const entryFile = Object.prototype.hasOwnProperty.call(files, bundle.entryFile)
+    ? bundle.entryFile
+    : Object.keys(files)[0] ?? "AGENTS.md";
+  return Object.keys(files).length > 0 ? { entryFile, files } : null;
+}
+
+function duplicateInstructionFilePath(
+  _bundle: AgentInstructionsBundle,
+  summary: AgentInstructionsFileSummary,
+): string | null {
+  if (summary.deprecated || summary.virtual) return null;
+  return summary.path;
+}
+
 const runStatusIcons: Record<string, { icon: typeof CheckCircle2; color: string }> = {
   succeeded: { icon: CheckCircle2, color: "text-green-600 dark:text-green-400" },
   failed: { icon: XCircle, color: "text-red-600 dark:text-red-400" },
@@ -117,6 +152,7 @@ const RUN_LOG_PAGE_BYTES = 256_000;
 const REDACTED_ENV_VALUE = "***REDACTED***";
 const SECRET_ENV_KEY_RE =
   /(api[-_]?key|access[-_]?token|auth(?:_?token)?|authorization|bearer|secret|passwd|password|credential|jwt|private[-_]?key|cookie|connectionstring)/i;
+const COMMAND_ENV_KEY_RE = /(^command$|^cmd$|command[-_]?line|resolved[-_]?command|PAPERCLIP_RESOLVED_COMMAND)/i;
 const JWT_VALUE_RE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?$/;
 
 function redactPathText(value: string, censorUsernameInLogs: boolean) {
@@ -125,6 +161,10 @@ function redactPathText(value: string, censorUsernameInLogs: boolean) {
 
 function redactPathValue<T>(value: T, censorUsernameInLogs: boolean): T {
   return redactHomePathUserSegmentsInValue(value, { enabled: censorUsernameInLogs });
+}
+
+function redactCommandText(value: string, censorUsernameInLogs: boolean): string {
+  return redactPathText(redactCommandSecretText(value, REDACTED_ENV_VALUE), censorUsernameInLogs);
 }
 
 function shouldRedactSecretValue(key: string, value: unknown): boolean {
@@ -144,6 +184,7 @@ function redactEnvValue(key: string, value: unknown, censorUsernameInLogs: boole
   }
   if (shouldRedactSecretValue(key, value)) return REDACTED_ENV_VALUE;
   if (value === null || value === undefined) return "";
+  if (typeof value === "string" && COMMAND_ENV_KEY_RE.test(key)) return redactCommandText(value, censorUsernameInLogs);
   if (typeof value === "string") return redactPathText(value, censorUsernameInLogs);
   try {
     return JSON.stringify(redactPathValue(value, censorUsernameInLogs));
@@ -304,7 +345,7 @@ export function RunInvocationCard({
   payload: Record<string, unknown>;
   censorUsernameInLogs: boolean;
 }) {
-  const commandLine = [
+  const rawCommandLine = [
     typeof payload.command === "string" ? payload.command : null,
     ...(Array.isArray(payload.commandArgs)
       ? payload.commandArgs.filter((value): value is string => typeof value === "string")
@@ -312,6 +353,7 @@ export function RunInvocationCard({
   ]
     .filter((value): value is string => Boolean(value))
     .join(" ");
+  const commandLine = rawCommandLine ? redactCommandText(rawCommandLine, censorUsernameInLogs) : "";
 
   const hasAdvancedDetails =
     commandLine.length > 0
@@ -628,7 +670,8 @@ export function AgentDetail() {
   }>();
   const { companies, selectedCompanyId, setSelectedCompanyId } = useCompany();
   const { closePanel } = usePanel();
-  const { openNewIssue } = useDialog();
+  const { openNewIssue } = useDialogActions();
+  const { pushToast } = useToastActions();
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -799,6 +842,57 @@ export function AgentDetail() {
       setActionError(err instanceof Error ? err.message : "Action failed");
     },
   });
+
+  const duplicateAgent = useMutation({
+    mutationFn: async () => {
+      if (!agent?.id || !resolvedCompanyId) {
+        throw new Error("Agent is not ready to duplicate");
+      }
+
+      const instructionsBundle = await loadDuplicateInstructionsBundle(agent.id, resolvedCompanyId);
+      const payload = buildDuplicateAgentPayload(agent, instructionsBundle);
+
+      try {
+        return await agentsApi.create(resolvedCompanyId, payload);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 409 && error.message.includes("requires board approval")) {
+          const hire = await agentsApi.hire(resolvedCompanyId, payload);
+          return hire.agent;
+        }
+        throw error;
+      }
+    },
+    onSuccess: async (createdAgent) => {
+      setActionError(null);
+      if (resolvedCompanyId) {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.agents.list(resolvedCompanyId) });
+      }
+      pushToast({
+        title: "Agent duplicated",
+        body: createdAgent.name,
+        tone: "success",
+      });
+      navigate(`/agents/${agentRouteRef(createdAgent)}/dashboard`);
+    },
+    onError: (err) => {
+      const message = err instanceof Error ? err.message : "Failed to duplicate agent";
+      setActionError(message);
+      pushToast({
+        title: "Could not duplicate agent",
+        body: message,
+        tone: "error",
+      });
+    },
+  });
+
+  const handleDuplicateAgent = useCallback(() => {
+    if (!agent || duplicateAgent.isPending) return;
+    const nextName = duplicateAgentName(agent.name);
+    const confirmed = window.confirm(`Duplicate ${agent.name} as ${nextName}?`);
+    setMoreOpen(false);
+    if (!confirmed) return;
+    duplicateAgent.mutate();
+  }, [agent, duplicateAgent]);
 
   const budgetMutation = useMutation({
     mutationFn: (amount: number) =>
@@ -972,6 +1066,18 @@ export function AgentDetail() {
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-44 p-1" align="end">
+              <button
+                className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50"
+                disabled={duplicateAgent.isPending}
+                onClick={handleDuplicateAgent}
+              >
+                {duplicateAgent.isPending ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Copy className="h-3 w-3" />
+                )}
+                Duplicate Agent
+              </button>
               <button
                 className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50"
                 onClick={() => {
@@ -2271,7 +2377,7 @@ function PromptsTab({
               </div>
             </div>
           )}
-          <PackageFileTree
+          <FileTree
             nodes={fileTree}
             selectedFile={selectedOrEntryFile}
             expandedDirs={expandedDirs}
@@ -2469,7 +2575,7 @@ function PromptEditorSkeleton() {
   );
 }
 
-function AgentSkillsTab({
+export function AgentSkillsTab({
   agent,
   companyId,
 }: {
@@ -2652,11 +2758,18 @@ function AgentSkillsTab({
   }, [skillSnapshot?.mode]);
   const unsupportedSkillMessage = useMemo(() => {
     if (skillSnapshot?.mode !== "unsupported") return null;
+    if (
+      agent.adapterType === "acpx_local" &&
+      typeof agent.adapterConfig.agent === "string" &&
+      agent.adapterConfig.agent === "custom"
+    ) {
+      return "Paperclip cannot manage skills for custom ACP commands yet.";
+    }
     if (agent.adapterType === "openclaw_gateway") {
       return "Paperclip cannot manage OpenClaw skills here. Visit your OpenClaw instance to manage this agent's skills.";
     }
     return "Paperclip cannot manage skills for this adapter yet. Manage them in the adapter directly.";
-  }, [agent.adapterType, skillSnapshot?.mode]);
+  }, [agent.adapterConfig.agent, agent.adapterType, skillSnapshot?.mode]);
   const hasUnsavedChanges = !arraysEqual(skillDraft, lastSavedSkills);
   const saveStatusLabel = syncSkills.isPending
     ? "Saving changes..."
@@ -2887,6 +3000,7 @@ function RunListItem({ run, isSelected, agentId }: { run: HeartbeatRun; isSelect
   const summary = run.resultJson
     ? String((run.resultJson as Record<string, unknown>).summary ?? (run.resultJson as Record<string, unknown>).result ?? "")
     : run.error ?? "";
+  const sourceResolvedFold = readSourceResolvedWatchdogFold(run.resultJson);
 
   return (
     <Link
@@ -2910,6 +3024,7 @@ function RunListItem({ run, isSelected, agentId }: { run: HeartbeatRun; isSelect
         )}>
           {sourceLabels[run.invocationSource] ?? run.invocationSource}
         </span>
+        {sourceResolvedFold ? <SourceResolvedFoldBadge showIcon={false} className="shrink-0 text-[10px] py-0" /> : null}
         <span className="ml-auto text-[11px] text-muted-foreground shrink-0">
           {relativeTime(run.createdAt)}
         </span>
@@ -3500,6 +3615,13 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
           <pre className="bg-neutral-100 dark:bg-neutral-950 rounded-md p-3 text-xs font-mono text-foreground overflow-x-auto whitespace-pre-wrap">{run.stdoutExcerpt}</pre>
         </div>
       )}
+
+      {(() => {
+        const fold = readSourceResolvedWatchdogFold(run.resultJson);
+        if (!fold) return null;
+        if (run.status === "failed" || run.status === "timed_out") return null;
+        return <SourceResolvedFoldCallout fold={fold} finalizedAt={run.finishedAt} />;
+      })()}
 
       {/* Log viewer */}
       <LogViewer run={run} adapterType={adapterType} />

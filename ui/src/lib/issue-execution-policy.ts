@@ -61,7 +61,9 @@ export function buildExecutionPolicy(input: {
   approverValues: string[];
 }): IssueExecutionPolicy | null {
   const mode = input.existingPolicy?.mode ?? "normal";
+  const followUpMode = input.existingPolicy?.followUpMode ?? null;
   const stages: IssueExecutionPolicy["stages"] = [];
+  const monitor = input.existingPolicy?.monitor ?? null;
 
   const existingReviewStage = input.existingPolicy?.stages.find((stage) => stage.type === "review");
   const reviewParticipants = mergeParticipants(existingReviewStage?.participants, input.reviewerValues);
@@ -85,10 +87,11 @@ export function buildExecutionPolicy(input: {
     });
   }
 
-  if (stages.length === 0) {
-    if (mode === "checkpoint") {
+  if (stages.length === 0 && !monitor) {
+    if (mode === "checkpoint" || followUpMode) {
       return {
         mode,
+        ...(followUpMode ? { followUpMode } : {}),
         commentRequired: true,
         stages: [],
       };
@@ -98,7 +101,9 @@ export function buildExecutionPolicy(input: {
 
   return {
     mode,
+    ...(followUpMode ? { followUpMode } : {}),
     commentRequired: true,
     stages,
+    ...(monitor ? { monitor } : {}),
   };
 }

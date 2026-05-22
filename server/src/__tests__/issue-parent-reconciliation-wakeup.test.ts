@@ -47,15 +47,26 @@ const mockIssueReferenceService = vi.hoisted(() => ({
 vi.mock("../services/index.js", () => ({
   accessService: () => ({}),
   agentService: () => ({}),
+  companyService: () => ({ getById: vi.fn(async () => null) }),
   documentService: () => ({}),
   executionWorkspaceService: () => ({}),
   feedbackService: () => ({}),
   goalService: () => ({}),
   heartbeatService: () => mockHeartbeatService,
   instanceSettingsService: () => ({}),
-  issueApprovalService: () => ({}),
+  issueApprovalService: () => ({
+    listApprovalsForIssue: vi.fn(async () => []),
+  }),
+  issueRecoveryActionService: () => ({
+    getActiveForIssue: vi.fn(async () => null),
+    listActiveForIssues: vi.fn(async () => []),
+    resolveActiveForIssue: vi.fn(async () => null),
+  }),
   issueService: () => mockIssueService,
   issueReferenceService: () => mockIssueReferenceService,
+  issueThreadInteractionService: () => ({
+    listForIssue: vi.fn(async () => []),
+  }),
   logActivity: mockLogActivity,
   projectService: () => ({}),
   routineService: () => ({

@@ -23,7 +23,9 @@ const mockAgentService = vi.hoisted(() => ({
 
 const mockProjectService = vi.hoisted(() => ({}));
 const mockGoalService = vi.hoisted(() => ({}));
-const mockIssueApprovalService = vi.hoisted(() => ({}));
+const mockIssueApprovalService = vi.hoisted(() => ({
+  listApprovalsForIssue: vi.fn(async () => []),
+}));
 const mockExecutionWorkspaceService = vi.hoisted(() => ({}));
 const mockWorkProductService = vi.hoisted(() => ({}));
 const mockDocumentService = vi.hoisted(() => ({}));
@@ -54,17 +56,26 @@ const mockIssueReferenceService = vi.hoisted(() => ({
 vi.mock("../services/index.js", () => ({
   accessService: () => mockAccessService,
   agentService: () => mockAgentService,
+  companyService: () => ({ getById: vi.fn(async () => null) }),
   heartbeatService: () => mockHeartbeatService,
   issueService: () => mockIssueService,
   projectService: () => mockProjectService,
   goalService: () => mockGoalService,
   instanceSettingsService: () => ({}),
   issueApprovalService: () => mockIssueApprovalService,
+  issueRecoveryActionService: () => ({
+    getActiveForIssue: vi.fn(async () => null),
+    listActiveForIssues: vi.fn(async () => []),
+    resolveActiveForIssue: vi.fn(async () => null),
+  }),
   executionWorkspaceService: () => mockExecutionWorkspaceService,
   feedbackService: () => ({}),
   workProductService: () => mockWorkProductService,
   documentService: () => mockDocumentService,
   issueReferenceService: () => mockIssueReferenceService,
+  issueThreadInteractionService: () => ({
+    listForIssue: vi.fn(async () => []),
+  }),
   routineService: () => mockRoutineService,
   logActivity: mockLogActivity,
 }));

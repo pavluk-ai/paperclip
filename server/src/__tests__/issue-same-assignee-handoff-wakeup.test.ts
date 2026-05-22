@@ -14,6 +14,7 @@ const mockIssueService = vi.hoisted(() => ({
   findMentionedAgents: vi.fn(),
   listWakeableBlockedDependents: vi.fn(),
   getWakeableParentAfterChildCompletion: vi.fn(),
+  getCurrentScheduledRetry: vi.fn(),
   assertCheckoutOwner: vi.fn(),
 }));
 
@@ -47,18 +48,27 @@ const mockIssueReferenceService = vi.hoisted(() => ({
 }));
 const mockIssueThreadInteractionService = vi.hoisted(() => ({
   expireRequestConfirmationsSupersededByComment: vi.fn(async () => []),
+  listForIssue: vi.fn(async () => []),
 }));
 
 vi.mock("../services/index.js", () => ({
   accessService: () => ({}),
   agentService: () => ({}),
+  companyService: () => ({ getById: vi.fn(async () => null) }),
   documentService: () => ({}),
   executionWorkspaceService: () => ({}),
   feedbackService: () => ({}),
   goalService: () => ({}),
   heartbeatService: () => mockHeartbeatService,
   instanceSettingsService: () => ({}),
-  issueApprovalService: () => ({}),
+  issueApprovalService: () => ({
+    listApprovalsForIssue: vi.fn(async () => []),
+  }),
+  issueRecoveryActionService: () => ({
+    getActiveForIssue: vi.fn(async () => null),
+    listActiveForIssues: vi.fn(async () => []),
+    resolveActiveForIssue: vi.fn(async () => null),
+  }),
   issueService: () => mockIssueService,
   issueReferenceService: () => mockIssueReferenceService,
   issueThreadInteractionService: () => mockIssueThreadInteractionService,
@@ -127,6 +137,7 @@ describe("issue same-assignee handoff wakeup", () => {
     mockIssueService.findMentionedAgents.mockResolvedValue([]);
     mockIssueService.listWakeableBlockedDependents.mockResolvedValue([]);
     mockIssueService.getWakeableParentAfterChildCompletion.mockResolvedValue(null);
+    mockIssueService.getCurrentScheduledRetry.mockResolvedValue(null);
   });
 
   it("wakes the same assignee when a manager posts a handoff comment and activates the issue", async () => {
