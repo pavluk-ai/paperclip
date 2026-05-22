@@ -47,7 +47,9 @@ Follow these steps every time you wake up:
   - add a markdown comment explaining why it remains open and what happens next.
     Always include links to the approval and issue in that comment.
 
-**Step 3 — Get assignments.** Prefer `GET /api/agents/me/inbox-lite` for the normal heartbeat inbox. It returns the compact assignment list you need for prioritization. Fall back to `GET /api/companies/{companyId}/issues?assigneeAgentId={your-agent-id}&status=todo,in_progress,in_review,blocked` only when you need the full issue objects.
+**Step 3 — Get assignments.** Prefer `GET /api/agents/me/inbox-lite` for the normal heartbeat inbox. It returns the compact assignment list you need for prioritization. Fall back to `GET /api/companies/{companyId}/issues?assigneeAgentId={your-agent-id}&status=todo,in_progress,in_review,blocked` when you need the full issue objects.
+
+Also run the full assignment query before exiting when `inbox-lite` returns no actionable work, returns only blocked work, or seems inconsistent with a wake payload/comment that says you were assigned. This fallback is required for review handoffs and same-issue reassignments, because compact inboxes can lag or omit `in_review` items.
 
 **Step 4 — Pick work.** Priority: `in_progress` → `in_review` (if woken by a comment on it — check `PAPERCLIP_WAKE_COMMENT_ID`) → `todo`. Skip `blocked` unless you can unblock.
 
@@ -58,6 +60,7 @@ Overrides and special cases:
 - `PAPERCLIP_WAKE_REASON=issue_comment_mentioned` → read the comment thread first even if you're not the assignee. Self-assign (via checkout) only if the comment explicitly directs you to take the task. Otherwise respond in comments if useful and continue with your own assigned work; do not self-assign.
 - Wake payload says `dependency-blocked interaction: yes` → the issue is still blocked for deliverable work. Do not try to unblock it. Read the comment, name the unresolved blocker(s), and respond/triage via comments or documents. Use the scoped wake context rather than treating a checkout failure as a blocker.
 - **Blocked-task dedup:** before touching a `blocked` task, check the thread. If your most recent comment was a blocked-status update and no one has replied since, skip entirely — do not checkout, do not re-comment. Only re-engage on new context (comment, status change, event wake).
+- **Handoff mismatch check:** if the latest comment says "next owner", "handoff", "ready for review", "rework", "assigning", "reassigning", or equivalent, verify that `status`, `assigneeAgentId`, `assigneeUserId`, and `blockedByIssueIds` match that statement. A comment alone does not move ownership. If you are the current owner making the handoff, patch the issue before exiting. If you are a manager/coordinator and the issue is stuck because the stated next owner does not match stored state, correct the issue or reassign to your manager with a clear blocker.
 - Nothing assigned and no valid mention handoff → exit the heartbeat.
 
 **Step 5 — Checkout.** You MUST checkout before doing any work. Include the run ID header:
@@ -102,6 +105,15 @@ If `currentParticipant` does not match you, do not try to advance the stage — 
 **Step 8 — Update status and communicate.** Always include the run ID header.
 If you are blocked at any point, you MUST update the issue to `blocked` before exiting the heartbeat, with a comment that explains the blocker and who needs to act.
 
+**Handoff consistency requirement.** A "Next owner:" line is only valid when the API state matches it before you exit. When you hand off:
+
+- Builder/implementer to reviewer: `PATCH` to `status: "in_review"` and set `assigneeAgentId` to the reviewer agent in the same update that posts handoff evidence.
+- Verifier PASS: `PATCH` to `status: "done"` with PASS evidence, unless an execution policy stage says otherwise.
+- Verifier REWORK: `PATCH` to `status: "in_progress"` and set `assigneeAgentId` to the implementer/return assignee in the same update that posts findings. If no return assignee is clear, reassign to your manager/Architect and explain the routing gap.
+- Manager/Architect activating the next dependency: clear resolved `blockedByIssueIds`, set the next leaf's `status` to the actionable state, and assign it to the actual owner in one update.
+
+After any handoff patch, immediately `GET /api/issues/{issueId}` and confirm the stored status and assignee match your comment. If they do not, fix the mismatch before exiting or mark the issue `blocked` with the unblock owner/action. Do not rely on @-mentions or comments to trigger ownership changes.
+
 When writing issue descriptions or comments, follow the ticket-linking rule in **Comment Style** below.
 
 ```json
@@ -128,7 +140,7 @@ Status values: `backlog`, `todo`, `in_progress`, `in_review`, `done`, `blocked`,
 - `backlog` — parked/unscheduled, not something you're about to start this heartbeat.
 - `todo` — ready and actionable, but not checked out yet. Use for newly assigned or resumable work; don't PATCH into `in_progress` just to signal intent — enter `in_progress` by checkout.
 - `in_progress` — actively owned, execution-backed work.
-- `in_review` — paused pending reviewer/approver/board/user feedback. Use when handing work off for review; not a synonym for done. If a human asks to take the task back, reassign to them and set `in_review`.
+- `in_review` — paused pending reviewer/approver/board/user feedback. Use when handing work off for review; not a synonym for done. The reviewer/approver/board user must be the stored assignee before you exit; a "next owner" comment alone is not a handoff. If a human asks to take the task back, reassign to them and set `in_review`.
 - `blocked` — cannot proceed until something specific changes. Always name the blocker and who must act, and prefer `blockedByIssueIds` over free-text when another issue is the blocker. `parentId` alone does not imply a blocker.
 - `done` — work complete, no follow-up on this issue.
 - `cancelled` — intentionally abandoned, not to be resumed.
@@ -234,6 +246,8 @@ For commands, response fields, and MCP tools, read:
 - **Never look for unassigned work.** No assignments = exit.
 - **Self-assign only for explicit @-mention handoff.** Requires a mention-triggered wake with `PAPERCLIP_WAKE_COMMENT_ID` and a comment that clearly directs you to do the task. Use checkout (never direct assignee patch).
 - **Honor "send it back to me" requests from board users.** If a board/user asks for review handoff (e.g. "let me review it", "assign it back to me"), reassign to them with `assigneeAgentId: null` and `assigneeUserId: "<requesting-user-id>"`, typically setting status to `in_review` instead of `done`. Resolve the user id from the triggering comment's `authorUserId` when available, else the issue's `createdByUserId` if it matches the requester context.
+- **Comments are not handoffs.** Any comment that says "next owner", "handoff", "ready for review", "rework", "assigning", or equivalent must be backed by issue status/assignee changes before exit.
+- **Post-update sanity check.** After a status/assignee/blocker handoff, fetch the issue and verify the stored state matches the narrative. Fix mismatches immediately if you own the issue; otherwise escalate.
 - **Start actionable work before planning-only closure.** Do concrete work in the same heartbeat unless the task asks for a plan or review only.
 - **Leave a next action.** Every progress comment should make clear what is complete, what remains, and who owns the next step.
 - **Prefer child issues over polling.** Create bounded child issues for long or parallel delegated work and rely on Paperclip wake events or comments for completion.
