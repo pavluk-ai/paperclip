@@ -40,6 +40,7 @@ const mockAgentService = vi.hoisted(() => ({
 
 const mockAccessService = vi.hoisted(() => ({
   canUser: vi.fn(),
+  decide: vi.fn(),
   hasPermission: vi.fn(),
 }));
 
@@ -121,6 +122,11 @@ describe("agent wakeup route", () => {
       companyId,
       agentId,
       status: "queued",
+    });
+    mockAccessService.decide.mockResolvedValue({
+      allowed: true,
+      reason: "allow_explicit_grant",
+      explanation: "Allowed by test grant",
     });
     mockLogActivity.mockResolvedValue(undefined);
   });

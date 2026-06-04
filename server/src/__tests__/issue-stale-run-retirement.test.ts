@@ -61,6 +61,7 @@ const currentActor = vi.hoisted(() => ({
 vi.mock("../services/index.js", () => ({
   accessService: () => ({
     canUser: vi.fn(async () => true),
+    decide: vi.fn(async () => ({ allowed: true })),
     getPermissionStatus: vi.fn(async () => ({
       membership: { status: "active" },
       hasGrant: true,
@@ -70,6 +71,7 @@ vi.mock("../services/index.js", () => ({
   agentService: () => mockAgentService,
   companyService: () => ({ getById: vi.fn(async () => null) }),
   documentService: () => ({}),
+  documentAnnotationService: () => ({}),
   executionWorkspaceService: () => ({}),
   feedbackService: () => ({}),
   goalService: () => ({}),

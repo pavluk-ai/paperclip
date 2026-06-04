@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { resolveRuntimeBind, validateConfiguredBindMode } from "@paperclipai/shared";
 import { buildPresetServerConfig } from "../config/server-bind.js";
 
+const ORIGINAL_PATH = process.env.PATH;
+
 describe("network bind helpers", () => {
   it("rejects non-loopback bind modes in local_trusted", () => {
     expect(
@@ -50,8 +52,7 @@ describe("network bind helpers", () => {
 
   it("falls back to loopback when no tailscale address is available for tailnet presets", () => {
     delete process.env.PAPERCLIP_TAILNET_BIND_HOST;
-    const previousPath = process.env.PATH;
-    process.env.PATH = "/nonexistent";
+    process.env.PATH = "";
 
     try {
       const preset = buildPresetServerConfig("tailnet", {
@@ -62,7 +63,7 @@ describe("network bind helpers", () => {
 
       expect(preset.server.host).toBe("127.0.0.1");
     } finally {
-      process.env.PATH = previousPath;
+      process.env.PATH = ORIGINAL_PATH;
     }
   });
 });

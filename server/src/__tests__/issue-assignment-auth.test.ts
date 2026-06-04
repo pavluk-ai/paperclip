@@ -6,6 +6,7 @@ import { errorHandler } from "../middleware/index.js";
 
 const mockAccessService = vi.hoisted(() => ({
   canUser: vi.fn(),
+  decide: vi.fn(),
   getPermissionStatus: vi.fn(),
 }));
 
@@ -72,6 +73,7 @@ vi.mock("../services/index.js", () => ({
   feedbackService: () => ({}),
   workProductService: () => mockWorkProductService,
   documentService: () => mockDocumentService,
+  documentAnnotationService: () => ({}),
   issueReferenceService: () => mockIssueReferenceService,
   issueThreadInteractionService: () => ({
     listForIssue: vi.fn(async () => []),
@@ -121,9 +123,10 @@ describe("issue assignment auth", () => {
   });
 
   it("returns a membership-specific error when the acting agent has no active membership", async () => {
-    mockAccessService.getPermissionStatus.mockResolvedValue({
-      membership: null,
-      hasGrant: false,
+    mockAccessService.decide.mockResolvedValue({
+      allowed: false,
+      explanation:
+        "Agent company access is missing or inactive. Open Company Settings -> Access and make sure this agent has an active membership.",
     });
 
     const res = await request(createApp())
@@ -140,9 +143,10 @@ describe("issue assignment auth", () => {
   });
 
   it("returns a grant-specific error when the acting agent is a member without tasks:assign", async () => {
-    mockAccessService.getPermissionStatus.mockResolvedValue({
-      membership: { status: "active" },
-      hasGrant: false,
+    mockAccessService.decide.mockResolvedValue({
+      allowed: false,
+      explanation:
+        "Missing permission: tasks:assign. Open Company Settings -> Access and grant tasks:assign to this agent.",
     });
 
     const res = await request(createApp())
@@ -160,10 +164,7 @@ describe("issue assignment auth", () => {
   });
 
   it("creates the issue and wakes the assignee when the acting agent has membership and grant", async () => {
-    mockAccessService.getPermissionStatus.mockResolvedValue({
-      membership: { status: "active" },
-      hasGrant: true,
-    });
+    mockAccessService.decide.mockResolvedValue({ allowed: true });
 
     const res = await request(createApp())
       .post("/api/companies/company-1/issues")
