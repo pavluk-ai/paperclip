@@ -20,6 +20,7 @@ const mockIssueService = vi.hoisted(() => ({
 
 const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
+  resolveByReference: vi.fn(),
 }));
 
 const mockProjectService = vi.hoisted(() => ({}));
@@ -53,6 +54,21 @@ const mockIssueReferenceService = vi.hoisted(() => ({
     currentReferencedIssues: [],
   })),
 }));
+
+function createEmptySelectChain() {
+  const rows = Promise.resolve([]);
+  return {
+    from: vi.fn(() => ({
+      where: vi.fn(() => ({
+        then: rows.then.bind(rows),
+      })),
+    })),
+  };
+}
+
+const mockDb = {
+  select: vi.fn(() => createEmptySelectChain()),
+};
 
 vi.mock("../services/index.js", () => ({
   accessService: () => mockAccessService,
@@ -97,7 +113,7 @@ function createApp() {
   app.use(
     "/api",
     issueRoutes(
-      {} as any,
+      mockDb as any,
       {} as any,
     ),
   );
@@ -117,6 +133,15 @@ describe("issue assignment auth", () => {
       status: "todo",
       assigneeAgentId: "22222222-2222-4222-8222-222222222222",
       assigneeUserId: null,
+    });
+    mockAgentService.resolveByReference.mockResolvedValue({
+      ambiguous: false,
+      agent: {
+        id: "22222222-2222-4222-8222-222222222222",
+        companyId: "company-1",
+        status: "active",
+        orgChainHealth: { status: "ok" },
+      },
     });
     mockLogActivity.mockResolvedValue(undefined);
     mockRoutineService.syncRunStatusForIssue.mockResolvedValue(undefined);

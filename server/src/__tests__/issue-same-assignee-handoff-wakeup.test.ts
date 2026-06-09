@@ -51,8 +51,28 @@ const mockIssueThreadInteractionService = vi.hoisted(() => ({
   listForIssue: vi.fn(async () => []),
 }));
 
+const mockAccessService = vi.hoisted(() => ({
+  decide: vi.fn(async () => ({ allowed: true })),
+}));
+
+function createEmptySelectChain() {
+  const rows = Promise.resolve([]);
+  return {
+    from: vi.fn(() => ({
+      where: vi.fn(() => ({
+        orderBy: vi.fn(() => rows),
+        then: rows.then.bind(rows),
+      })),
+    })),
+  };
+}
+
+const mockDb = {
+  select: vi.fn(() => createEmptySelectChain()),
+};
+
 vi.mock("../services/index.js", () => ({
-  accessService: () => ({}),
+  accessService: () => mockAccessService,
   agentService: () => ({}),
   companyService: () => ({ getById: vi.fn(async () => null) }),
   documentService: () => ({}),
@@ -94,7 +114,7 @@ function createApp(actor?: Record<string, unknown>) {
     };
     next();
   });
-  app.use("/api", issueRoutes({} as any, {} as any));
+  app.use("/api", issueRoutes(mockDb as any, {} as any));
   app.use(errorHandler);
   return app;
 }

@@ -398,7 +398,10 @@ export function normalizeIssueExecutionPolicy(input: unknown): IssueExecutionPol
     }
     : null;
 
-  if (stages.length === 0 && !monitor) {
+  const reviewPreset = parsed.data.reviewPreset;
+  const authorizationPolicy = parsed.data.authorizationPolicy;
+
+  if (stages.length === 0 && !monitor && !reviewPreset && !authorizationPolicy) {
     if (mode === "checkpoint" || followUpMode) {
       return {
         mode,
@@ -416,6 +419,8 @@ export function normalizeIssueExecutionPolicy(input: unknown): IssueExecutionPol
     commentRequired: true,
     stages,
     ...(monitor ? { monitor } : {}),
+    ...(reviewPreset ? { reviewPreset } : {}),
+    ...(authorizationPolicy ? { authorizationPolicy } : {}),
   };
 }
 
